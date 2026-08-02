@@ -10,6 +10,22 @@ and `backend/pyproject.toml` — and read from there everywhere else (the
 sidebar footer, Settings → About, and `GET /api/health`). Bump both, and
 add an entry here, in the same commit as the change.
 
+## 0.9.1 — 2026-08-02
+
+### Fixed
+- **Splitting on OpenAI failed with `Unrecognized request argument supplied:
+  chat_template_kwargs`.** Every splitter request carried that llama.cpp
+  extension (it suppresses Qwen's thinking blocks) unconditionally, and
+  OpenAI rejects unknown arguments. Request bodies are now built by one
+  helper that only includes what the target accepts — the local extension
+  stays local, `max_tokens` becomes `max_completion_tokens` on OpenAI (its
+  reasoning tier rejects the old name), and the splitter honours the
+  "send temperature" setting, whose checkbox is back on its panel.
+- **The Settings Test could pass while every real split failed.** The probe
+  was a minimal hand-built request, so it never exercised the arguments the
+  real call sends. It is now built by the same helper as a real split —
+  anything the provider would reject fails at Test.
+
 ## 0.9.0 — 2026-08-02
 
 An audit of every field in `Settings → LLM providers`, prompted by the

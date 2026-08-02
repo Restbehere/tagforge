@@ -32,8 +32,8 @@ logger = logging.getLogger("tagforge.llm")
 DEFAULT_MODEL = "qwen3.6-27b-abliterated"
 
 
-def _chat_target(model: str | None) -> tuple[str, dict[str, str], str, bool]:
-    """Resolve (chat-completions URL, headers, model, supports_json_schema).
+def _chat_target(model: str | None):
+    """Resolve (chat-completions URL, headers, model, Target).
 
     The splitter normally drives the bundled llama-swap server, but it can
     be pointed at any OpenAI-compatible endpoint — useful because this
@@ -61,10 +61,59 @@ def _chat_target(model: str | None) -> tuple[str, dict[str, str], str, bool]:
     # Providers publish their base URL with the version already on it
     # ("https://openrouter.ai/api/v1"), so appending another /v1 would 404.
     suffix = "/chat/completions" if base.endswith("/v1") else "/v1/chat/completions"
-    # llama.cpp constrains generation with the schema grammar, so JSON is
-    # guaranteed there. A third-party gateway may ignore json_schema, so we
-    # ask for the weaker json_object mode instead of getting prose back.
-    return f"{base}{suffix}", headers, chosen, target.is_local
+    return f"{base}{suffix}", headers, chosen, target
+
+
+_PROBE_SCHEMA = {
+    "type": "object",
+    "properties": {"ok": {"type": "boolean"}},
+    "required": ["ok"],
+}
+
+
+def _chat_body(
+    model: str,
+    messages: list[dict[str, str]],
+    *,
+    target,
+    temperature: float,
+    max_tokens: int,
+    schema_name: str,
+    schema: dict,
+) -> dict[str, Any]:
+    """Build a chat-completions body with only arguments the target accepts.
+
+    ``chat_template_kwargs`` is a llama.cpp extension (it suppresses Qwen's
+    thinking blocks). OpenAI rejects any unrecognised argument with a 400,
+    so it — and anything else local-only — must never leave this helper for
+    a remote target. The Settings Test probe is built here too, so a body
+    the provider rejects fails at Test instead of on the first real split.
+    """
+    local = target.is_local
+    body: dict[str, Any] = {
+        "model": model,
+        # llama.cpp constrains generation with the schema grammar, so JSON
+        # is guaranteed there. A third-party gateway may ignore json_schema,
+        # so we ask for the weaker json_object mode instead of getting prose
+        # back. (Every prompt sent through here says "JSON" — OpenAI's
+        # json_object mode refuses requests whose messages never mention it.)
+        "response_format": _response_format(local, schema_name, schema),
+        "messages": messages,
+    }
+    # OpenAI deprecated max_tokens for max_completion_tokens and its
+    # reasoning tier (o-series, gpt-5) rejects the old name outright;
+    # gateways and llama.cpp are the reverse. Same value, per-target key.
+    body["max_completion_tokens" if target.kind == "openai" else "max_tokens"] = (
+        max_tokens
+    )
+    if local:
+        body["chat_template_kwargs"] = {"enable_thinking": False}
+        body["temperature"] = temperature
+    elif target.send_temperature:
+        # Reasoning models reject an explicit temperature; the Settings
+        # checkbox turns it off for those.
+        body["temperature"] = temperature
+    return body
 
 
 def _local_base() -> str:
@@ -389,25 +438,24 @@ def _repair_dialogue(
         + (f"Characters: {who}\n" if who else "")
         + f"Bubble: {bubble.upper()}\nText position: {text_position.upper()}\n"
     )
-    url, headers, model, local = _chat_target(model)
+    url, headers, model, target = _chat_target(model)
     try:
         with httpx.Client(timeout=httpx.Timeout(120.0, connect=5.0)) as c:
             r = c.post(
                 url,
                 headers=headers,
-                json={
-                    "model": model,
-                    "temperature": 0.6,
-                    "max_tokens": 200,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                    "response_format": _response_format(
-                        local, "dialogue", _DIALOGUE_SCHEMA
-                    ),
-                    "messages": [
+                json=_chat_body(
+                    model,
+                    [
                         {"role": "system", "content": _DIALOGUE_REPAIR_SYSTEM},
                         {"role": "user", "content": user},
                     ],
-                },
+                    target=target,
+                    temperature=0.6,
+                    max_tokens=200,
+                    schema_name="dialogue",
+                    schema=_DIALOGUE_SCHEMA,
+                ),
             )
         r.raise_for_status()
         return json.loads(r.json()["choices"][0]["message"]["content"]).get("dialogue", "")
@@ -688,7 +736,7 @@ def nai_split(
     Blocking — the first request after idle loads the model (tens of
     seconds), so callers should use a generous timeout.
     """
-    url, headers, model, local = _chat_target(model)
+    url, headers, model, target = _chat_target(model)
     t0 = time.time()
     filtered_tags, character_names = _prefilter_tags(tags, strip_identity)
     if not filtered_tags:
@@ -725,19 +773,18 @@ def nai_split(
             r = c.post(
                 url,
                 headers=headers,
-                json={
-                    "model": model,
-                    "temperature": 0.5 if include_speech else 0.15,
-                    "max_tokens": 2048,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                    "response_format": _response_format(
-                        local, "nai_prompt", _SPLIT_SCHEMA
-                    ),
-                    "messages": [
+                json=_chat_body(
+                    model,
+                    [
                         {"role": "system", "content": NAI_SYSTEM},
                         {"role": "user", "content": user},
                     ],
-                },
+                    target=target,
+                    temperature=0.5 if include_speech else 0.15,
+                    max_tokens=2048,
+                    schema_name="nai_prompt",
+                    schema=_SPLIT_SCHEMA,
+                ),
             )
     except httpx.HTTPError:
         raise  # mapped to HTTP status codes in the route layer
@@ -830,25 +877,24 @@ def nai_split(
 def nai_compose(idea: str, model: str | None = None) -> dict[str, Any]:
     """Author a full NAI V4.5 prompt (base + characters + dialogue) from a
     free-text idea — memes, koma comics, anything. Creative temperature."""
-    url, headers, model, local = _chat_target(model)
+    url, headers, model, target = _chat_target(model)
     t0 = time.time()
     with httpx.Client(timeout=httpx.Timeout(420.0, connect=5.0)) as c:
         r = c.post(
             url,
             headers=headers,
-            json={
-                "model": model,
-                "temperature": 0.8,
-                "max_tokens": 2048,
-                "chat_template_kwargs": {"enable_thinking": False},
-                "response_format": _response_format(
-                    local, "nai_prompt", _SPLIT_SCHEMA
-                ),
-                "messages": [
+            json=_chat_body(
+                model,
+                [
                     {"role": "system", "content": NAI_COMPOSE_SYSTEM},
                     {"role": "user", "content": f"Idea:\n{idea}"},
                 ],
-            },
+                target=target,
+                temperature=0.8,
+                max_tokens=2048,
+                schema_name="nai_prompt",
+                schema=_SPLIT_SCHEMA,
+            ),
         )
     r.raise_for_status()
     body = r.json()

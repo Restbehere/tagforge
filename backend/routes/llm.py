@@ -199,13 +199,22 @@ def test_llm_config(body: LlmTestIn) -> dict[str, Any]:
         if body.feature == "splitter":
             # The splitter speaks plain HTTP, never the OpenAI SDK — testing
             # it through the SDK would demand the [llm] extras it does not use.
-            url, headers, model, _local = svc._chat_target(None)
+            url, headers, model, target = svc._chat_target(None)
+            # Built by the same helper as a real split, so an argument the
+            # provider rejects (response_format quirks, local-only extensions,
+            # temperature on reasoning models) fails HERE — a minimal probe
+            # once passed while every actual split 400ed.
+            probe_body = svc._chat_body(
+                model,
+                [{"role": "user", "content": 'Reply with exactly this JSON: {"ok": true}'}],
+                target=target,
+                temperature=0.0,
+                max_tokens=16,
+                schema_name="probe",
+                schema=svc._PROBE_SCHEMA,
+            )
             with httpx.Client(timeout=30.0) as c:
-                r = c.post(
-                    url,
-                    headers=headers,
-                    json={"model": model, "messages": probe, "max_tokens": 8},
-                )
+                r = c.post(url, headers=headers, json=probe_body)
             if r.status_code >= 400:
                 return {"ok": False, "detail": f"HTTP {r.status_code}: {r.text[:200]}"}
             got = (r.json()["choices"][0]["message"]["content"] or "").strip()

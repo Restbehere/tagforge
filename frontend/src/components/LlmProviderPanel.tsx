@@ -142,10 +142,11 @@ function FeatureForm({
   // describe a provider the user has only just selected.
   const kindChanged = form.kind !== data.config[feature].kind;
   const effectiveHint = kindChanged ? "" : hint;
-  // Both knobs only bite on the Stage 3 fan-out: the splitter issues one
-  // request at a time, and the Anthropic path pins temperature itself.
+  // Concurrency only bites on the Stage 3 fan-out — the splitter issues one
+  // request at a time. Temperature matters to both features (reasoning
+  // models reject it), except Anthropic, which pins its own.
   const showConcurrency = feature === "stage3";
-  const showTemperature = feature === "stage3" && form.kind !== "anthropic";
+  const showTemperature = form.kind !== "anthropic";
 
   return (
     <div className="rounded border border-line bg-bg-subtle/30 p-3">
