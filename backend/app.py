@@ -29,6 +29,11 @@ from .routes import trends as trends_route
 
 logger = logging.getLogger("tagforge")
 
+# httpx logs each request line at INFO, query string included — and booru
+# auth (login/api_key) travels there. Set at import so it holds however the
+# app is launched (cli serve, uvicorn directly, the .bat launchers).
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 def _fail_orphaned_jobs() -> int:
     """Mark jobs left 'pending'/'running' by a backend crash as errored.

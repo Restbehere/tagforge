@@ -242,6 +242,10 @@ def serve(
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    # httpx logs every request line at INFO, including the query string —
+    # which is where booru login/api_key travel. WARNING keeps real failures
+    # visible without writing credentials to the log.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     app()
 
 

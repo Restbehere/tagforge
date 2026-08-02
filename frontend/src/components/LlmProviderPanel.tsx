@@ -96,7 +96,13 @@ function FeatureForm({
   // but never over the top of edits in progress — both panels re-render on
   // any save, and this used to discard whatever the other one held.
   useEffect(() => {
-    if (!dirty) setForm(data.config[feature]);
+    if (!dirty) {
+      setForm(data.config[feature]);
+      // The typed-vs-prefilled distinction only spans the current unsaved
+      // edit. Leaving it set meant a saved model kept surviving later
+      // provider switches, so the old provider's model stayed in the box.
+      setModelTouched(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [saved, feature]);
 
@@ -110,6 +116,7 @@ function FeatureForm({
       }),
     onSuccess: () => {
       setApiKey("");
+      setModelTouched(false);
       toast.success(`${feature === "stage3" ? "Stage 3" : "Splitter"} settings saved`);
       onSaved();
     },

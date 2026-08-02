@@ -102,8 +102,16 @@ def _resolve_device(requested: str | None) -> tuple[str, str | None]:
     else:
         device = want  # honour explicit "cuda:1" / "cuda:0"
 
+    # Parse the index OUTSIDE the try: a malformed 'cuda:x' used to raise
+    # inside it, skip the device-count clamp, and reach SentenceTransformer
+    # verbatim as a RuntimeError from torch.
     try:
         idx = int(device.split(":", 1)[1]) if ":" in device else 0
+    except ValueError:
+        logger.warning("stage-2: unparseable device %r; using cuda:0", device)
+        device, idx = "cuda:0", 0
+
+    try:
         if idx >= torch.cuda.device_count():
             logger.warning(
                 "stage-2: requested %s but only %d CUDA device(s) visible; using cuda:0",
@@ -152,10 +160,15 @@ def reclassify_residuals(
     model = SentenceTransformer(model_name, device=resolved_device)
 
     with db.session_scope() as s:
+        # Centroids come from trusted labels only. Including bucket_source
+        # 'embed' fed this stage its own prior guesses, so each run's noise
+        # dragged the next run's centroids further off.
         labelled = [
             (t.bucket, t.name)
             for t in s.exec(
-                select(Tag).where(Tag.bucket.in_(ACTIVE_BUCKETS))  # type: ignore[arg-type]
+                select(Tag)
+                .where(Tag.bucket.in_(ACTIVE_BUCKETS))  # type: ignore[arg-type]
+                .where(Tag.bucket_source != "embed")
             ).all()
         ]
         residual_pairs = [
@@ -219,7 +232,16 @@ def reclassify_residuals(
             if sim < threshold:
                 continue
             db_tag = s.get(Tag, tag_id)
-            if db_tag is None or db_tag.locked:
+            # Re-check eligibility, not just `locked`. The residual set was
+            # snapshotted minutes ago (embedding ~80k texts takes a while);
+            # a Stage 3 run or a manual edit in that window would otherwise
+            # be silently overwritten by a stale cosine verdict.
+            if (
+                db_tag is None
+                or db_tag.locked
+                or db_tag.bucket != "other"
+                or db_tag.bucket_source not in ("unknown", "tag_tree")
+            ):
                 continue
             new_bucket = bucket_names[int(idx)]
             # Audit row first, *before* we overwrite the from_* state.

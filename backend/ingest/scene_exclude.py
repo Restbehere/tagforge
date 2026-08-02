@@ -81,10 +81,11 @@ _SUBJECT_COUNTER_RE = re.compile(
     r"|^1girl_1boy$"
 )
 
-# Safe tail/wings/breasts matching without catching ``ponytail``, ``detail``, etc.
+# Safe tail/wings/breasts matching without catching ``ponytail``, ``detail``,
+# or the twintails hairstyle family, etc.
 _TAIL_RE = re.compile(
     r"^(no_)?tail(s)?$"
-    r"|(?<!pony)tail(s)?(_|$)"
+    r"|(?<!pony)(?<!twin)tail(s)?(_|$)"
     r"|_(?:cat|dog|fox|dragon|demon|snake|fish|fluffy|long|short|multiple)_tail$"
 )
 _WINGS_RE = re.compile(r"^(no_|alternate_)?wings$|_wings$")
@@ -186,7 +187,14 @@ def is_scene_excluded(name: str) -> bool:
         return True
     if _BREASTS_RE.search(n):
         return True
-    if _TAIL_RE.search(n) and "ponytail" not in n and "cocktail" not in n:
+    # twintails / low_twintails / short_twintails are hairstyles, not anatomy
+    # — they were silently stripped from every scene line for months.
+    if (
+        _TAIL_RE.search(n)
+        and "ponytail" not in n
+        and "cocktail" not in n
+        and "twintail" not in n
+    ):
         return True
     if _WINGS_RE.search(n) and "earrings" not in n:
         return True

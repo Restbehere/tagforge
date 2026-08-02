@@ -411,11 +411,19 @@ def run_metadata_ingest(
         batch: list[tuple[MetadataRecord, list[str]]] = []
 
         for idx, rec in enumerate(iter_metadata_records(path), start=1):
-            cleaned = clean_prompt(
-                rec.prompt,
-                drop_artist_tags=drop_artist_tags,
-                drop_quality_tags=drop_quality_tags,
-            )
+            try:
+                # One malformed record (a non-string prompt from a dumped
+                # ComfyUI workflow, say) used to abort the entire job at
+                # whatever position it appeared.
+                cleaned = clean_prompt(
+                    str(rec.prompt or ""),
+                    drop_artist_tags=drop_artist_tags,
+                    drop_quality_tags=drop_quality_tags,
+                )
+            except Exception:
+                logger.warning("skipping unparseable record %d", idx, exc_info=True)
+                skipped += 1
+                continue
             if not cleaned.tags:
                 # Counted as skipped — must not also be inserted, or the row
                 # lands tagless AND is double-counted in the summary math.
@@ -648,11 +656,21 @@ def _flush_metadata_batch(
                 # idempotent: clear old image_tag rows
                 for it in s.exec(select(ImageTag).where(ImageTag.image_id == img.id)).all():
                     s.delete(it)
+                # Refresh the prompt fields too. Tags were re-derived from the
+                # new record but raw_prompt kept the FIRST import's text, so a
+                # re-ingest left the row internally inconsistent — and the
+                # Builder's tag filters read raw_prompt, not image_tag.
+                img.raw_prompt = rec.prompt or ""
+                img.raw_negative = rec.negative
+                img.width = rec.width or img.width
+                img.height = rec.height or img.height
+                img.nai_model = rec.nai_model or img.nai_model
+                img.software = rec.software or img.software
                 if img.rating_source != "provided":
                     img.rating = inferred_rating
                     img.rating_source = "inferred"
                     img.rating_evidence = ",".join(evidence[:16]) or None
-                    s.add(img)
+                s.add(img)
             else:
                 img = Image(
                     source_id=source_id,
@@ -721,8 +739,12 @@ def run_booru_fetch(*, job_id: int, params: dict[str, Any]) -> None:
     try:
         asyncio.run(_run_booru_fetch_async(job_id, params))
     except Exception as exc:
-        logger.exception("booru fetch failed")
-        jobs.update_job(job_id, status="error", error=str(exc), finished=True)
+        # Redact before logging, never logger.exception: booru auth travels in
+        # the query string, so any exception carrying a URL would print the
+        # login and api_key into the server log in clear text.
+        safe = jobs.redact_secrets(f"{type(exc).__name__}: {exc}")
+        logger.error("booru fetch failed: %s", safe)
+        jobs.update_job(job_id, status="error", error=safe, finished=True)
 
 
 async def _run_booru_fetch_async(job_id: int, params: dict[str, Any]) -> None:

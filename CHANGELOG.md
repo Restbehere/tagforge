@@ -10,6 +10,114 @@ and `backend/pyproject.toml` — and read from there everywhere else (the
 sidebar footer, Settings → About, and `GET /api/health`). Bump both, and
 add an entry here, in the same commit as the change.
 
+## 0.9.2 — 2026-08-02
+
+A full-codebase audit — nine subsystems, every finding independently
+verified before it counted. 20 real defects, most of them in the
+classification pipeline and none previously visible as an error: they
+produced wrong data quietly.
+
+**One-time repair.** Several fixes correct rules that already labelled
+existing tags. New ingests are right immediately; stored rows change only
+when you run `Tags → Re-apply stage 1 rules`, which now also re-evaluates
+tags whose deterministic rule changed but whose confidence did not. On the
+current corpus that moves ~163 tags (~94k tag references) — mostly hair
+accessories and neckwear into `outfit`, and scene words like `nature`,
+`cityscape` and `backlighting` into `background`.
+
+### Security
+- **Booru credentials could reach the log file.** `login` and `api_key`
+  travel in the query string, and a 4xx raised an exception whose message
+  embeds the full URL — logged verbatim on every failed fetch. 4xx now
+  raise a redacted error, the job handler redacts before logging, and
+  httpx's own request logging (which prints the query string at INFO) is
+  quieted. The same 4xx were also retried three times, replaying the
+  credentials; they are now excluded from retries.
+- Export `buckets` values become output filenames but skipped the path
+  validator applied to `name`/`file_prefix`, so `../../x` could write
+  outside the export directory.
+- No ceiling on gzip-decompressed stealth-PNG payloads: the 4 MB input cap
+  bounded only the compressed size, so a crafted image could inflate to
+  gigabytes. Capped at 32 MB.
+
+### Fixed — classification
+- **Tag-tree conflicts were resolved by JSON walk order, not the documented
+  priority.** Tags appear under several parents and `PRIORITY_MAP` is meant
+  to pick the winner; the walk kept whichever leaf it reached first. Worse,
+  a tag whose first-seen leaf sat under an unmapped section was pinned to
+  `other` — hiding a real bucket it had elsewhere, and sending it to the
+  paid LLM. `navel`, `collarbone`, `barefoot` and `mustache` were all stuck
+  that way. Results are now stable if upstream reorders the tree.
+- **`twintails` was classified as an anatomy tail** and stripped from every
+  scene line, export and Builder roll — 22k tag references. The anatomy
+  regex carved out `ponytail` but not the twintail family.
+- **Unknown parenthesised qualifiers were stamped `character` before the
+  tag tree was consulted**, so `shower_(place)`, `diamond_(shape)` and
+  `dakimakura_(medium)` were exported as characters. The franchise guess now
+  runs last, and the qualifier map covers place/shape/symbol/medium/
+  software/sex.
+- **`echo` dry runs were not dry.** Their all-`other` verdicts were written
+  to the LLM cache and stamped `bucket_source='llm'` on every tag touched,
+  permanently excluding those tags from Stage 2 and Stage 3. Echo now
+  touches neither the cache nor any tag row.
+- **A model replying `Outfit` instead of `outfit` had its whole run
+  discarded.** Bucket values were compared raw against a lowercase list and
+  clamped to `other`, then cached — so the damage was permanent and the job
+  still reported success. Values are normalised, and an unrecognisable
+  bucket is skipped so the tag is retried rather than pinned.
+- Stage 2 built its centroids from any labelled tag including its own prior
+  guesses, so each run's noise pulled the next run's centroids further off.
+- Stage 2 wrote its verdicts back checking only `locked`, so a Stage 3 run
+  or manual edit during the minutes it spends embedding was silently
+  overwritten by a stale result.
+
+### Fixed — everything else
+- **`character.txt` ignored the Origin filter**: the booru-only override beat
+  an explicit choice, so a "local" export shipped 150k booru lines and
+  dropped every local one. The override now applies only when no origin is
+  set.
+- **Builder tag search missed most of the corpus.** Whole-tag matching
+  assumed underscores and a single `', '` separator, so space-form tags
+  (~42% of the corpus) and 40k newline-separated prompts were invisible:
+  searching `long hair` found 692 images where 120,773 match.
+- **Recursive folder ingest keyed images by basename**, so `batch1/image_0.png`
+  and `batch2/image_0.png` overwrote each other. Ids now come from the path
+  relative to the ingest folder, and re-ingest refreshes the prompt fields
+  instead of leaving tags and `raw_prompt` disagreeing.
+- **ComfyUI PNGs were shredded into hundreds of garbage tags** — their
+  `prompt` text chunk holds the workflow JSON, which was parsed as a NovelAI
+  parameter dict.
+- A1111 `stealth_pnginfo` images never decoded: the shorter `stealth_png`
+  magic prefix-matched and consumed `info` as the payload length.
+- One malformed record aborted an entire metadata ingest instead of being
+  skipped.
+- **The Batch API was unusable since 0.9.0** — the route required an explicit
+  `provider: "openai"` that the UI had correctly stopped sending. My
+  regression; the guard now resolves the configured endpoint.
+- An `order:` metatag inside a user's tag search silently used cursor
+  pagination, which Danbooru only supports for `order:id` — 500 past page 1,
+  or wrong results via the windowed fallback.
+- Splitter: forcing bubbles off crashed with an `IndexError` when the whole
+  lead-in was the bubble piece; suppression only scrubbed the first block, so
+  multi-line dialogue shipped a bubble and its own suppression; weighted
+  `::…::` directives were split on their interior commas, silently changing
+  what they suppress; identity-strip could re-admit the character name via the
+  verbatim backstop; and a remote model returning `null` where a string
+  belonged crashed with a 500.
+- Status, Test and Unload each resolved the local server's address by a
+  different rule — Unload ignored a configured address entirely.
+- Export temp files used one fixed `.tmp` name, so two exports sharing a
+  mirror folder corrupted each other; a duplicated scene-recipe bucket
+  repeated its tags in every line; and the recipe path held all 1.6M rows in
+  memory instead of streaming.
+- A job's terminal event could be dropped when a stalled subscriber's queue
+  filled, leaving the UI showing it as running forever.
+- An empty-valued `TAGFORGE_*` variable resolved paths to `.`, which would
+  have pointed Decompose's "Update" at Tag Forge's own checkout.
+- Settings: switching provider kept the previous provider's model after a
+  save; the batch "Applying…" button stuck forever if the apply job failed;
+  and manual bucket edits left the relabel-history stats panel stale.
+
 ## 0.9.1 — 2026-08-02
 
 ### Fixed

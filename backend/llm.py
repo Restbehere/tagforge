@@ -389,6 +389,24 @@ _MAX_LEAD_IN_PIECES = 24
 
 _BUBBLE_RE = re.compile(r"speech\s+bubble", re.IGNORECASE)
 
+# ``-1::speech bubble, tiny hearts::`` is ONE directive whose scope is the
+# whole span. Splitting it on interior commas tore the span apart and could
+# drop a middle tag while leaving the weights around it, silently changing
+# what the directive suppresses.
+_WEIGHTED_SPAN_RE = re.compile(r"-?\d*(?:\.\d+)?::[^:]*::")
+
+
+def _split_lead(lead: str) -> list[str]:
+    """Comma-split a dialogue lead-in, keeping weighted ``::`` spans whole."""
+    out: list[str] = []
+    pos = 0
+    for m in _WEIGHTED_SPAN_RE.finditer(lead):
+        out.extend(lead[pos : m.start()].split(","))
+        out.append(m.group(0))
+        pos = m.end()
+    out.extend(lead[pos:].split(","))
+    return out
+
 
 def _apply_bubble_mode(text: str, bubble: str) -> str:
     """Force the user's speech-bubble choice onto the dialogue.
@@ -403,14 +421,40 @@ def _apply_bubble_mode(text: str, bubble: str) -> str:
         return text
     lead, sep, rest = text.partition('"')
     want = "speech bubble" if bubble == "on" else "-1::speech bubble::"
+    # Strip bubble mentions from the WHOLE string, not just the lead: a
+    # multi-block dialogue ('red text "A", speech bubble, "B"') otherwise
+    # kept a later plain 'speech bubble' alongside the suppression directive
+    # and rendered a bubble the user had switched off. Only unquoted spans
+    # are scrubbed so spoken words are never touched.
+    def _scrub(segment: str) -> str:
+        if not segment.strip():
+            return segment  # nothing there (e.g. the tail after the last quote)
+        kept = [p.strip() for p in segment.split(",")]
+        remaining = [p for p in kept if p and not _BUBBLE_RE.search(p)]
+        if not remaining:
+            # Removing the only piece must not fuse two quoted blocks
+            # together ('"A", speech bubble, "B"' -> '"A""B"').
+            return ", "
+        out = ", ".join(remaining)
+        return f"{out}, " if segment.rstrip().endswith(",") else out
+
+    tail_parts = rest.split('"')
+    for i in range(1, len(tail_parts), 2):  # odd indices sit outside quotes
+        tail_parts[i] = _scrub(tail_parts[i])
+    rest = '"'.join(tail_parts)
+
     pieces = [p.strip() for p in lead.split(",") if p.strip()]
     pieces = [p for p in pieces if not _BUBBLE_RE.search(p)]
     # A trailing comma means every piece is separated from the quote; without
     # one the final piece qualifies the quoted string and must stay adjacent.
+    # `pieces` can be empty once bubble pieces are removed (the whole lead was
+    # 'speech bubble '), which used to IndexError on pieces[-1].
     hugging = bool(lead.strip()) and not lead.rstrip().endswith(",")
-    if hugging:
+    if hugging and pieces:
         head, hug = pieces[:-1], pieces[-1]
         return f"{', '.join(head + [want, hug])} {sep}{rest}"
+    if not pieces:
+        return f"{want} {sep}{rest}"
     return f"{', '.join(pieces + [want])}, {sep}{rest}"
 
 
@@ -465,12 +509,46 @@ def _repair_dialogue(
         return ""
 
 
+def _coerce_split_output(out: Any) -> dict[str, Any]:
+    """Force a split/compose reply into the shape the rest of the code assumes.
+
+    Only llama.cpp constrains generation to the JSON schema; remote endpoints
+    get ``json_object``, which promises an object and nothing about its
+    fields. Coercing here keeps one bad reply from surfacing as a 500.
+    """
+    if not isinstance(out, dict):
+        raise LlmOutputError("the model did not return the expected JSON shape")
+
+    def _text(value: Any) -> str:
+        return value.strip() if isinstance(value, str) else ""
+
+    characters: list[dict[str, str]] = []
+    raw_chars = out.get("characters")
+    if isinstance(raw_chars, list):
+        for ch in raw_chars:
+            if isinstance(ch, dict):
+                characters.append(
+                    {"name": _text(ch.get("name")), "prompt": _text(ch.get("prompt"))}
+                )
+            elif isinstance(ch, str):
+                # Some models flatten characters to bare prompt strings.
+                characters.append({"name": "", "prompt": ch.strip()})
+
+    return {
+        "base_prompt": _text(out.get("base_prompt")),
+        "scene_description": _text(out.get("scene_description")),
+        "dialogue": _text(out.get("dialogue")),
+        "background_tags": _text(out.get("background_tags")),
+        "characters": characters,
+    }
+
+
 def _clean_dialogue(text: str) -> str:
     text = " ".join(text.split())
     if '"' not in text:
         return ""
     lead, sep, rest = text.partition('"')
-    pieces = [p.strip() for p in lead.split(",") if p.strip()]
+    pieces = [p.strip() for p in _split_lead(lead) if p.strip()]
     if len(pieces) <= _MAX_LEAD_IN_PIECES:
         # Punctuation here is meaningful — `light pink text "X"` binds the
         # descriptor to that string, while `..., text on top left, text "X"`
@@ -803,12 +881,19 @@ def nai_split(
         out = json.loads(choice["message"]["content"])
     except (json.JSONDecodeError, KeyError, TypeError):
         raise LlmOutputError("the model did not return valid JSON")
+    # json_object mode (every remote endpoint — only llama.cpp constrains to
+    # the schema) guarantees an object, not its field types. A null or a
+    # list where a string belongs used to crash with a 500 several lines on.
+    out = _coerce_split_output(out)
 
     drop = set(_META_DROP)
     if not include_speech:
         drop |= _TEXT_DROP
 
-    allowed = {_canon(t) for t in _tokens(tags)}
+    # In strip mode the verbatim backstop must not re-admit the very tags the
+    # prefilter removed: `allowed` built from the RAW input let a model that
+    # recognised the outfit put 'hatsune miku' back into the prompt.
+    allowed = {_canon(t) for t in _tokens(filtered_tags if strip_identity else tags)}
     base_tags = _verbatim_backstop(
         _ensure_counts(_strip(out.get("base_prompt", ""), drop), tags), allowed
     )
@@ -908,21 +993,18 @@ def nai_compose(idea: str, model: str | None = None) -> dict[str, Any]:
         out = json.loads(choice["message"]["content"])
     except (json.JSONDecodeError, KeyError, TypeError):
         raise LlmOutputError("the model did not return valid JSON")
+    out = _coerce_split_output(out)
 
-    base_tags = out.get("base_prompt", "").strip().rstrip(",")
-    scene = out.get("scene_description", "").strip()
-    dialogue = out.get("dialogue", "").strip()
+    base_tags = out["base_prompt"].rstrip(",")
+    scene = out["scene_description"]
+    dialogue = out["dialogue"]
     tail = " ".join(x for x in (scene, dialogue) if x)
     return {
         "base_prompt": f"{base_tags}, {tail}" if tail else base_tags,
         "base_tags": base_tags,
         "scene_description": scene,
         "dialogue": dialogue,
-        "characters": [
-            {"name": ch.get("name", ""), "prompt": ch.get("prompt", "")}
-            for ch in out.get("characters", [])
-            if ch.get("prompt", "").strip()
-        ],
+        "characters": [ch for ch in out["characters"] if ch["prompt"]],
         "model": model,
         "mode": "compose",
         "include_speech": bool(dialogue),

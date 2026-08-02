@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   keepPreviousData,
   useMutation,
@@ -29,7 +29,7 @@ import { Panel } from "@/components/Panel";
 import { BucketBadge } from "@/components/BucketBadge";
 import { Checkbox, ConfirmButton, Field } from "@/components/forms";
 import { invalidateTagDerived } from "@/lib/invalidate";
-import { jobStore } from "@/lib/jobStore";
+import { jobStore, useActiveJobs } from "@/lib/jobStore";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
 
 type TagsTab = "browse" | "review";
@@ -349,30 +349,36 @@ function SmartClassifyCard() {
     refetchInterval: 30_000,
   });
 
-  // Track applies per batch id: the POST returns immediately (background
-  // job), so the mutation's isPending can't gate the button for the whole
-  // apply duration. Ids stay in the set until the refetch shows applied=true.
-  const [applyingBatches, setApplyingBatches] = useState<Set<number>>(
-    new Set(),
+  // Track applies per batch id -> the background job doing the applying.
+  // The POST returns immediately, so the mutation's isPending can't gate the
+  // button for the whole apply duration.
+  const [applyingBatches, setApplyingBatches] = useState<Map<number, number>>(
+    new Map(),
   );
+
+  // Release a batch once its apply job leaves the active set — on failure as
+  // well as success. Keying on applied=true alone left the button stuck on
+  // "Applying…" forever whenever the apply job errored, with no way to retry.
+  const activeJobs = useActiveJobs();
+  useEffect(() => {
+    setApplyingBatches((prev) => {
+      if (!prev.size) return prev;
+      const next = new Map(prev);
+      for (const [batchId, jobId] of prev) {
+        if (!activeJobs.includes(jobId)) next.delete(batchId);
+      }
+      return next.size === prev.size ? prev : next;
+    });
+  }, [activeJobs]);
   const applyBatchMut = useMutation({
     mutationFn: (id: number) => api.applyLlmBatch(id),
-    onMutate: (id) => {
-      setApplyingBatches((prev) => new Set(prev).add(id));
-    },
-    onSuccess: ({ job_id }) => {
+    onSuccess: ({ job_id }, id) => {
       jobStore.add(job_id);
+      setApplyingBatches((prev) => new Map(prev).set(id, job_id));
       toast.success("applying batch results");
       qc.invalidateQueries({ queryKey: ["llm-batches"] });
     },
-    onError: (err: Error, id) => {
-      setApplyingBatches((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-      toast.error(err.message);
-    },
+    onError: (err: Error) => toast.error(err.message),
   });
 
   const rebuildMut = useMutation({
@@ -722,10 +728,12 @@ function SmartClassifyCard() {
                       className="pf-btn text-xs"
                       disabled={
                         b.status !== "completed" || applyingBatches.has(b.id)
+
                       }
                       onClick={() => applyBatchMut.mutate(b.id)}
                     >
-                      {applyingBatches.has(b.id) ? "Applying…" : "Apply results"}
+                      {applyingBatches.has(b.id)
+ ? "Applying…" : "Apply results"}
                     </button>
                   )}
                 </span>

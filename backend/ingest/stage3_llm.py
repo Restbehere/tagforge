@@ -331,13 +331,20 @@ def _is_junk_tag_name(name: str) -> bool:
 
 
 def _merge_result_into_cache(cache: dict[str, str], result: dict[str, str]) -> None:
-    """Re-key by canonical name (underscores) + clamp buckets to ALLOWED."""
+    """Re-key by canonical name (underscores) + normalise/validate buckets."""
     for raw_name, bucket in result.items():
         canon = str(raw_name).strip().lower().replace(" ", "_")
         if _is_junk_tag_name(canon):
             continue
+        # Normalise the VALUE the same way as the key. Models routinely reply
+        # 'Outfit' or 'pose ' — clamping raw values to 'other' silently threw
+        # away entire runs' verdicts AND cached the damage permanently.
+        bucket = str(bucket).strip().lower()
         if bucket not in ALLOWED:
-            bucket = "other"
+            # An unrecognisable bucket ('clothing', 'n/a') is a bad answer,
+            # not a verdict. Skip it so the tag is retried next run instead
+            # of being pinned to 'other' forever.
+            continue
         cache[canon] = bucket
 
 
@@ -522,7 +529,10 @@ def reclassify_residuals(
                     failed_batches += 1
                 else:
                     _merge_result_into_cache(cache, result)
-                if done % 10 == 0:
+                # Echo is a dry run: persisting its all-'other' verdicts
+                # poisoned the real cache, permanently excluding every touched
+                # tag from future (paid) passes.
+                if done % 10 == 0 and provider != "echo":
                     _save_cache(cache)
                 if job_id is not None:
                     jobs.update_job(
@@ -530,7 +540,8 @@ def reclassify_residuals(
                         progress=0.1 + 0.7 * (done / total),
                         message=f"LLM batch {done}/{total} ({failed_batches} failed)",
                     )
-        _save_cache(cache)
+        if provider != "echo":
+            _save_cache(cache)
 
         # Every single batch failing means a permanent per-call error (bad
         # model name, revoked key, ...) — surface it as a red job instead of
@@ -539,6 +550,21 @@ def reclassify_residuals(
             raise RuntimeError(
                 f"all {total} LLM batches failed; last error: {last_error}"
             )
+
+    if provider == "echo":
+        # Dry run ends here: applying echo's verdicts stamped
+        # bucket_source='llm' onto every touched tag, which excluded them
+        # from Stage 2/3 forever while relabelling nothing.
+        elapsed = (datetime.now(timezone.utc) - start).total_seconds()
+        return Stage3Result(
+            requested=len(residual_pairs),
+            relabelled=0,
+            by_bucket={},
+            elapsed_sec=elapsed,
+            cache_path="(dry run — cache and tags untouched)",
+            failed_batches=failed_batches,
+            changed_tag_ids=[],
+        )
 
     relabelled, by_bucket, _still_other, changed_tag_ids = _apply_cache_to_tags(
         cache, residual_pairs, f"{provider}:{model}", job_id

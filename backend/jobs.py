@@ -161,7 +161,15 @@ async def _dispatch(job_id: int, payload: dict[str, Any]) -> None:
         try:
             q.put_nowait(payload)
         except asyncio.QueueFull:
-            pass
+            # Drop the OLDEST event, not this one. A chatty job could fill a
+            # stalled subscriber's queue and then lose its terminal
+            # done/error payload, leaving that stream open and the UI showing
+            # the job as running forever. Newest always wins.
+            try:
+                q.get_nowait()
+                q.put_nowait(payload)
+            except (asyncio.QueueEmpty, asyncio.QueueFull):
+                pass
 
 
 async def subscribe(job_id: int | None = None) -> AsyncIterator[dict[str, Any]]:

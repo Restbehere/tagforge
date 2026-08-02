@@ -77,21 +77,37 @@ def _strip_tags(text: str, excl: set[str]) -> str:
     return ", ".join(t for t in _tokens(text) if _canon(t) not in excl)
 
 
-def _tag_boundary_like(t: str):
-    """Whole-tag LIKE against a comma-normalized raw_prompt.
+def _wrapped_prompt():
+    """``,tag,tag,`` form of raw_prompt for whole-tag LIKE matching.
 
-    Substring contains() is wrong for subject filters — 'solo' would match
-    'solo_focus'. Wrap the prompt in commas, collapse ', ' to ',', and match
-    ',tag,' with LIKE wildcards escaped.
+    Separators vary across the corpus: booru imports use ', ', NovelAI
+    exports embed newlines, and some prompts have double spaces. Collapsing
+    only ', ' left 40k prompts whose tokens the filters could never see, so
+    strip newlines/CRs first and collapse twice for doubled spaces.
+
+    Intra-tag spaces are then converted to underscores so 'long hair' and
+    'long_hair' both match — local metadata stores the space form for ~42%
+    of the corpus, which whole-tag underscore matching silently skipped.
     """
     from sqlalchemy import literal
 
-    wrapped = (
-        literal(",")
-        .concat(func.replace(Image.raw_prompt, ", ", ","))
-        .concat(literal(","))
-    )
-    escaped = t.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    text = func.replace(Image.raw_prompt, literal("\n"), literal(","))
+    text = func.replace(text, literal("\r"), literal(","))
+    for _ in range(2):
+        text = func.replace(text, literal(", "), literal(","))
+    text = func.replace(text, literal(" "), literal("_"))
+    return literal(",").concat(text).concat(literal(","))
+
+
+def _tag_boundary_like(t: str):
+    """Whole-tag LIKE against a normalized raw_prompt.
+
+    Substring contains() is wrong for subject filters — 'solo' would match
+    'solo_focus'. Match ',tag,' with LIKE wildcards escaped.
+    """
+    wrapped = _wrapped_prompt()
+    canon = t.strip().lower().replace(" ", "_")
+    escaped = canon.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return wrapped.like(f"%,{escaped},%", escape="\\")
 
 

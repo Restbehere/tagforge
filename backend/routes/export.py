@@ -82,6 +82,16 @@ class ExportFilters(BaseModel):
     def _no_path_components(cls, v: str, info: Any) -> str:
         return _safe_component(v, info.field_name)
 
+    @field_validator("buckets", "scene_buckets")
+    @classmethod
+    def _buckets_are_names(cls, v: list[str], info: Any) -> list[str]:
+        # Bucket values become output FILENAMES (<bucket>.txt) — a value like
+        # "../../x" walked out of the export directory and truncated whatever
+        # .txt it landed on. Same guard as name/file_prefix.
+        for entry in v:
+            _safe_component(entry, info.field_name)
+        return v
+
 
 def _run_export_job(job_id: int, body: dict[str, Any]) -> None:
     try:

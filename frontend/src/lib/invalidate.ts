@@ -10,6 +10,10 @@ export function invalidateTagDerived(qc: QueryClient): void {
     ["tags"],
     ["tags-review"],
     ["tag-history"],
+    // The history STATS panel ("Top from -> to flows") sits next to the
+    // history list; without this it kept showing pre-edit flows.
+    ["tag-history-stats"],
+    ["classify-queue"],
     ["trends"],
     ["dashboard"],
   ]) {

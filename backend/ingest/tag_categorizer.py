@@ -167,7 +167,16 @@ def _load_tag_tree() -> dict[str, str]:
     with path.open("r", encoding="utf-8") as fh:
         tree = json.load(fh)
 
-    mapping: dict[str, str] = {}
+    # tag -> (priority rank, bucket). Tags appear under several parents, and
+    # PRIORITY_MAP order is supposed to pick the winner. The old walk kept
+    # whichever leaf the JSON iteration reached FIRST (dict insertion order),
+    # which mis-bucketed hundreds of common tags ('nature' via composition
+    # instead of background) and — worse — pinned tags whose first-seen leaf
+    # sat under an unmapped section to 'other', hiding their real path from
+    # Stage 1 entirely. Keeping the lowest rank across every occurrence makes
+    # the result match the documented priority and stable under upstream
+    # re-orderings of tag_tree.json.
+    best: dict[str, tuple[int, str]] = {}
 
     def canonical_from_wiki(value: str) -> str:
         # "/wiki_pages/short_hair" -> "short_hair"
@@ -188,7 +197,10 @@ def _load_tag_tree() -> dict[str, str]:
                     else:
                         tag = canonical_from_key(k)
                     if tag:
-                        mapping.setdefault(tag, _bucket_for_path(path_stack + [k]))
+                        ranked = _rank_bucket_for_path(path_stack + [k])
+                        prev = best.get(tag)
+                        if prev is None or ranked[0] < prev[0]:
+                            best[tag] = ranked
                 else:
                     # Inner node: recurse, but don't add the section name to the
                     # path twice for the magic 'self' container.
@@ -200,16 +212,19 @@ def _load_tag_tree() -> dict[str, str]:
 
     walk(tree, [])
 
+    mapping = {tag: bucket for tag, (_rank, bucket) in best.items()}
     logger.info("Loaded %d tag→bucket mappings from tag_tree.json", len(mapping))
     return mapping
 
 
-def _bucket_for_path(path_stack: Iterable[str]) -> str:
+def _rank_bucket_for_path(path_stack: Iterable[str]) -> tuple[int, str]:
+    """(PRIORITY_MAP rank, bucket) for one leaf path; unmapped ranks last so
+    any real bucket from another occurrence of the tag beats 'other'."""
     joined = " / ".join(path_stack)
-    for needle, bucket in PRIORITY_MAP:
+    for rank, (needle, bucket) in enumerate(PRIORITY_MAP):
         if needle in joined:
-            return bucket
-    return "other"
+            return rank, bucket
+    return len(PRIORITY_MAP), "other"
 
 
 @lru_cache(maxsize=1)
@@ -267,20 +282,37 @@ _QUALIFIER_SUFFIX_BUCKET: dict[str, str] = {
     "food": "extras",
     "meme": "other",
     "module": "other",  # idolmaster module is a costume but too ambiguous
+    # Danbooru's qualifier families that are disambiguation but NOT franchise
+    # names. Without these, shower_(place) and diamond_(shape) fell through
+    # to the franchise fallback and were exported as characters.
+    "place": "background",
+    "shape": "extras",
+    "symbol": "extras",
+    "cheerleading": "extras",  # pom_pom_(cheerleading) — the prop
+    "medium": "quality_meta",  # dakimakura_(medium) describes the image itself
+    "software": "quality_meta",
+    "sex": "pose",  # shimaidon_(sex) etc. — act tags
 }
+
+# Qualifiers that mark a body/transformation variant, not a franchise —
+# genderswap_(mtf), crossdressing_(ftm). No scene bucket fits cleanly, so
+# they must fall through to the tree / Stage 2/3 instead of being stamped
+# 'character' by the franchise fallback.
+_NON_FRANCHISE_QUALIFIERS: frozenset[str] = frozenset({"mtf", "ftm", "otf"})
 
 _QUALIFIER_RE = re.compile(r"^(?P<base>.+?)_\((?P<qualifier>[a-z0-9_\-+&!\.']+)\)$")
 
 
 def _classify_qualifier_suffix(name: str) -> tuple[str, str, float] | None:
-    """Return ``(bucket, source_label, confidence)`` or ``None``.
+    """Return ``(bucket, source_label, confidence)`` for a KNOWN qualifier.
 
-    Handles tags of the form ``<base>_(<qualifier>)``:
-    - Known qualifier → use the mapped bucket (cosplay → outfit, etc.)
-    - Anything else → assume it's Danbooru's character disambiguation form
-      (``hatsune_miku_(vocaloid)``, ``stay_gold_clan_(umamusume)``) → ``character``
+    Handles tags of the form ``<base>_(<qualifier>)`` whose qualifier is in
+    the map (cosplay → outfit, place → background, ...). Unknown qualifiers
+    return ``None`` here — the franchise-disambiguation guess lives in
+    :func:`classify_tag` AFTER the tag-tree lookup, because guessing
+    'character' first permanently shadowed tags the tree actually knows.
 
-    Confidence is intentionally bounded to ~0.85 so an explicit
+    Confidence is intentionally bounded to ~0.88 so an explicit
     ``tags.jsonl`` category (1.0) still wins. We do NOT match if the result
     is ``"other"`` because that's not actionable.
     """
@@ -293,8 +325,17 @@ def _classify_qualifier_suffix(name: str) -> tuple[str, str, float] | None:
         if bucket == "other":
             return None  # don't proactively shove things into other
         return bucket, "qualifier_rule", 0.88
-    # Unknown qualifier → assume franchise disambiguation → character.
-    return "character", "franchise_suffix", 0.85
+    return None
+
+
+def _is_franchise_disambiguation(name: str) -> bool:
+    """``<base>_(<qualifier>)`` with a qualifier we have no rule for —
+    Danbooru's character form (``hatsune_miku_(vocaloid)``), assumed only
+    once every deterministic lookup has failed."""
+    m = _QUALIFIER_RE.match(name)
+    if m is None:
+        return False
+    return m.group("qualifier").lower() not in _NON_FRANCHISE_QUALIFIERS
 
 
 def _is_anthro_subject(name: str) -> bool:
@@ -392,6 +433,18 @@ def classify_tag(name: str) -> TagAssignment:
                     confidence=0.80,
                     category=category,
                 )
+
+    # Only now assume an unknown parenthesised qualifier is a franchise name.
+    # Guessing before the tree lookups routed shower_(place)-style tags into
+    # character.txt with a confidence Stage 2/3 never revisit.
+    if _is_franchise_disambiguation(name):
+        return TagAssignment(
+            name=name,
+            bucket="character",
+            bucket_source="franchise_suffix",
+            confidence=0.85,
+            category=category,
+        )
 
     return TagAssignment(
         name=name,

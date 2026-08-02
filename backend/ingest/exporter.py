@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import random
+from uuid import uuid4
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -177,10 +178,22 @@ def build_export(
 
     def _atomic_write(path: Path, text: str) -> None:
         """Temp file + os.replace so a mid-export crash never leaves a
-        truncated wildcard file where the generator could sample it."""
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(text, encoding="utf-8")
-        os.replace(tmp, path)
+        truncated wildcard file where the generator could sample it.
+
+        The temp name is unique per write: two exports pointed at the same
+        mirror folder (the normal shared-wildcards workflow) used to fight
+        over one ``<file>.txt.tmp`` and corrupt or fail each other's writes.
+        """
+        tmp = path.with_suffix(path.suffix + f".{os.getpid()}.{uuid4().hex}.tmp")
+        try:
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, path)
+        finally:
+            if tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
 
     def _mirror_write(filename: str, text: str) -> None:
         nonlocal mirror_dir, mirror_error
@@ -203,11 +216,18 @@ def build_export(
         cap = None
 
     # Scene recipe: which per-bucket lines compose scene.txt. Invalid entries
-    # are dropped; empty/unchanged recipes fall back to the stored fast path.
-    recipe = [
-        b for b in (scene_buckets or DEFAULT_SCENE_RECIPE) if b in SCENE_RECIPE_BUCKETS
-    ] or list(DEFAULT_SCENE_RECIPE)
-    custom_recipe = set(recipe) != set(DEFAULT_SCENE_RECIPE)
+    # are dropped and duplicates collapsed (a repeated bucket would repeat its
+    # tags in every composed line); empty/unchanged recipes fall back to the
+    # stored fast path. The comparison is order-sensitive because the recipe
+    # order IS the composition order.
+    recipe = list(
+        dict.fromkeys(
+            b
+            for b in (scene_buckets or DEFAULT_SCENE_RECIPE)
+            if b in SCENE_RECIPE_BUCKETS
+        )
+    ) or list(DEFAULT_SCENE_RECIPE)
+    custom_recipe = tuple(recipe) != tuple(DEFAULT_SCENE_RECIPE)
 
     # Tag share cap: display-form tokens whose lines get down-sampled so
     # they stay under cap_percent of each bucket file (e.g. white background).
@@ -263,11 +283,14 @@ def build_export(
         cap_dropped: dict[str, int] = {}
         for bucket in buckets:
             effective_min = _effective_min_tag_count(bucket, min_tag_count)
-            # ``character.txt`` is always sourced from booru ingests only — local
-            # metadata prompts do not carry Danbooru category-4 character tags.
+            # ``character.txt`` defaults to booru ingests (their category-4
+            # tags are authoritative), but ONLY when the user has expressed no
+            # origin preference — this override used to beat an explicit
+            # Origin filter, so a "local" export shipped 150k booru character
+            # lines and dropped every local one.
             bucket_origin = (
                 settings.origin_kinds("booru")
-                if bucket == "character"
+                if bucket == "character" and origin_kinds is None
                 else origin_kinds
             )
 
@@ -288,23 +311,34 @@ def build_export(
 
             if bucket == "scene" and custom_recipe:
                 # Compose scene lines at export time from the per-bucket rows
-                # so the recipe never requires a scene_line rebuild.
+                # so the recipe never requires a scene_line rebuild. Streamed
+                # in image order — materialising every row first (1.6M rows /
+                # ~0.5 GB on this corpus) held them all in memory at once.
                 q = _apply_image_filters(
                     select(SceneLine.image_id, SceneLine.bucket, SceneLine.tag_text)
                     .join(Image, Image.id == SceneLine.image_id)
                     .where(SceneLine.bucket.in_(recipe))  # type: ignore[arg-type]
-                )
-                per_image: dict[int, dict[str, str]] = {}
-                for row in s.exec(q).all():
+                ).order_by(SceneLine.image_id)  # type: ignore[union-attr]
+                rows = []
+                cur_image: int | None = None
+                parts: dict[str, str] = {}
+
+                def _emit_scene() -> None:
+                    if not parts:
+                        return
+                    line = ", ".join(parts[b] for b in recipe if parts.get(b))
+                    # The SQL tag_count floor doesn't apply to composed lines.
+                    if line and line.count(",") + 1 >= effective_min:
+                        rows.append(line)
+
+                for row in s.exec(q.execution_options(yield_per=10_000)):
                     image_id, sl_bucket, text = row[0], row[1], row[2]
+                    if image_id != cur_image:
+                        _emit_scene()
+                        cur_image, parts = image_id, {}
                     if text:
-                        per_image.setdefault(image_id, {})[sl_bucket] = text
-                rows = [
-                    ", ".join(parts[b] for b in recipe if parts.get(b))
-                    for parts in per_image.values()
-                ]
-                # The SQL tag_count floor doesn't apply to composed lines.
-                rows = [r for r in rows if r.count(",") + 1 >= effective_min]
+                        parts[sl_bucket] = text
+                _emit_scene()
             else:
                 q = _apply_image_filters(
                     select(SceneLine.tag_text)
@@ -404,12 +438,12 @@ def build_export(
         )
     if "character" in buckets and counts.get("character", 0) == 0:
         warnings.append(
-            "character.txt is empty: this bucket only comes from Danbooru/AIBooru "
-            "ingests (category-4 character tags on posts). Local metadata.txt does "
-            "not populate it — export always uses booru sources for this file even "
-            "if Origin is All. Check Scene rating filter uses g,s,q without spaces "
-            "(e.g. g,s not g, s). If you ran Rebuild scene_line on an older build, "
-            "click Tags → Fix booru character lines, then export again."
+            "character.txt is empty: with no Origin filter this bucket comes "
+            "from Danbooru/AIBooru ingests (category-4 character tags); with an "
+            "explicit Origin it follows that origin like every other bucket. "
+            "Check Scene rating filter uses g,s,q without spaces (e.g. g,s not "
+            "g, s). If you ran Rebuild scene_line on an older build, click "
+            "Tags → Fix booru character lines, then export again."
         )
 
     manifest = {

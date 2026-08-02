@@ -36,9 +36,14 @@ logger = logging.getLogger(__name__)
 
 IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"})
 
-# Magic headers written by the various stealth-PNG implementations.
+# Magic headers written by the various stealth-PNG implementations. Longest
+# first: 'stealth_png' is a prefix of 'stealth_pnginfo', and matching the
+# short form first consumed the tail ('info') as the payload length.
 _LSB_MAGICS: tuple[bytes, ...] = (
+    b"stealth_pnginfo",  # A1111 stealth-pnginfo, uncompressed alpha
     b"stealth_pngcomp",
+    b"stealth_rgbinfo",
+    b"stealth_rgbcomp",
     b"stealth_png",
     b"stealthpng",
     b"novelai",
@@ -47,6 +52,9 @@ _LSB_MAGICS: tuple[bytes, ...] = (
 
 # A stealth payload is a few KB; anything past this is a misread, not data.
 _MAX_LSB_PAYLOAD = 4 * 1024 * 1024
+# Decompressed ceiling: gzip reaches ~1000:1, so the compressed cap alone
+# let a crafted image expand to gigabytes before anything noticed.
+_MAX_LSB_DECOMPRESSED = 32 * 1024 * 1024
 
 
 class _BitsExhausted(RuntimeError):
@@ -136,8 +144,7 @@ def extract_metadata_lsb(path: Path) -> Optional[dict]:
             # it claims — a coincidence, not data.
             continue
 
-        for decode in (lambda b: gzip.decompress(b).decode("utf-8"),
-                       lambda b: b.decode("utf-8")):
+        for decode in (_gunzip_capped, lambda b: b.decode("utf-8")):
             try:
                 data = json.loads(decode(payload))
             except Exception:
@@ -145,6 +152,21 @@ def extract_metadata_lsb(path: Path) -> Optional[dict]:
             if isinstance(data, dict):
                 return data
     return None
+
+
+def _gunzip_capped(payload: bytes) -> str:
+    """Decompress with an output ceiling.
+
+    ``gzip.decompress`` has no size limit, so a 4 MB payload (the input cap)
+    could inflate to gigabytes of resident memory from one crafted file.
+    """
+    import zlib
+
+    dec = zlib.decompressobj(wbits=47)  # 47 = auto-detect zlib/gzip
+    out = dec.decompress(payload, _MAX_LSB_DECOMPRESSED)
+    if dec.unconsumed_tail:
+        raise ValueError("stealth payload exceeds the decompressed size cap")
+    return out.decode("utf-8")
 
 
 def extract_metadata_chunks(path: Path) -> Optional[dict]:
@@ -236,13 +258,48 @@ def _apply_nai_comment(rec: MetadataRecord, data: dict) -> None:
     rec.seed = rec.seed if rec.seed is not None else data.get("seed")
 
 
-def record_from_image(path: Path) -> Optional[MetadataRecord]:
-    """A :class:`MetadataRecord` for one image, or None if it carries none."""
+def _looks_like_nai_params(meta: dict) -> bool:
+    """Whether a bare ``prompt`` key really is a NovelAI parameter dict.
+
+    ComfyUI writes its own ``prompt`` tEXt chunk holding the whole workflow
+    as JSON, plus a ``workflow`` chunk. Treating that as a NAI parameter dict
+    fed multi-KB of node graph through the tag cleaner and produced hundreds
+    of garbage tags per image.
+    """
+    if "workflow" in meta:
+        return False
+    prompt = meta.get("prompt")
+    if isinstance(prompt, str):
+        stripped = prompt.strip()
+        # A NAI prompt is a tag list, never a JSON document.
+        if stripped.startswith(("{", "[")):
+            return False
+    elif not isinstance(prompt, dict):
+        return False
+    # Require at least one companion NovelAI parameter.
+    return any(k in meta for k in ("uc", "steps", "scale", "sampler", "seed"))
+
+
+def record_from_image(path: Path, root: Optional[Path] = None) -> Optional[MetadataRecord]:
+    """A :class:`MetadataRecord` for one image, or None if it carries none.
+
+    ``root`` is the ingest folder: the record's filename is made relative to
+    it so same-named files in different subfolders stay distinct. external_id
+    is derived from that name, and NovelAI's default export naming means
+    ``batch1/image_0.png`` and ``batch2/image_0.png`` otherwise collapsed
+    onto one row, each overwriting the other's prompt.
+    """
     meta = extract_metadata_lsb(path) or extract_metadata_chunks(path)
     if not meta:
         return None
 
-    rec = MetadataRecord(filename=path.name)
+    name = path.name
+    if root is not None:
+        try:
+            name = path.relative_to(root).as_posix()
+        except ValueError:
+            pass
+    rec = MetadataRecord(filename=name)
     rec.software = (meta.get("Software") or meta.get("software") or "").strip() or None
     rec.model = (meta.get("Source") or meta.get("source") or "").strip() or None
     if rec.model and "NovelAI" in (rec.software or ""):
@@ -261,7 +318,7 @@ def record_from_image(path: Path) -> Optional[MetadataRecord]:
             comment = None
     if isinstance(comment, dict):
         _apply_nai_comment(rec, comment)
-    elif "prompt" in meta and isinstance(meta.get("prompt"), (str, dict)):
+    elif _looks_like_nai_params(meta):
         # Some stealth payloads are the parameter dict itself.
         _apply_nai_comment(rec, meta)
 
@@ -276,6 +333,10 @@ def record_from_image(path: Path) -> Optional[MetadataRecord]:
     if not rec.prompt:
         rec.prompt = (meta.get("Description") or meta.get("description") or "").strip()
 
+    # A non-string prompt (a parsed workflow dict) would crash .strip() and be
+    # miscounted as "no metadata"; treat it as unreadable instead.
+    if not isinstance(rec.prompt, str):
+        return None
     return rec if rec.prompt.strip() else None
 
 
@@ -288,7 +349,7 @@ def iter_image_records(
         if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS:
             continue
         try:
-            yield path, record_from_image(path)
+            yield path, record_from_image(path, root=folder)
         except Exception:
             logger.exception("unreadable image %s", path)
             yield path, None

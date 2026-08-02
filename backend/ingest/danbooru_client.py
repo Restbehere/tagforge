@@ -39,6 +39,17 @@ class UpstreamTimeout(httpx.HTTPError):
     """
 
 
+class BooruClientError(httpx.HTTPError):
+    """A deterministic 4xx (bad key, anon tag cap, page past 1000).
+
+    Raised instead of letting ``raise_for_status`` fire: its message embeds
+    the full request URL, and auth travels in the query string, so the
+    credentials ended up in tracebacks and log files. Also excluded from
+    retries — re-sending a request the server has already refused just
+    replays the credentials three more times.
+    """
+
+
 # Tags that are "free" metatags and don't count toward the 2-paid-tag anon cap.
 # Source: Danbooru help:cheatsheet, verified 2026-05.
 FREE_METATAGS: frozenset[str] = frozenset(
@@ -238,7 +249,7 @@ class DanbooruClient:
             wait=wait_exponential_jitter(initial=1, max=30),
             retry=(
                 retry_if_exception_type((httpx.HTTPError, asyncio.TimeoutError))
-                & retry_if_not_exception_type(UpstreamTimeout)
+                & retry_if_not_exception_type((UpstreamTimeout, BooruClientError))
             ),
             reraise=True,
         ):
@@ -267,6 +278,18 @@ class DanbooruClient:
                         )
                     raise httpx.HTTPError(
                         f"upstream {resp.status_code}" + (f" — {msg}" if msg else "")
+                    )
+                if 400 <= resp.status_code < 500:
+                    # Never call raise_for_status here: its message embeds the
+                    # full URL, and login/api_key ride in the query string.
+                    detail = ""
+                    try:
+                        detail = (resp.json() or {}).get("message", "")
+                    except Exception:
+                        pass
+                    raise BooruClientError(
+                        f"{endpoint} returned {resp.status_code}"
+                        + (f" — {detail}" if detail else "")
                     )
                 resp.raise_for_status()
                 return resp.json()
@@ -346,6 +369,14 @@ class DanbooruClient:
         """
         out: list[Post] = []
         last_id: Optional[int] = None
+        # An order: metatag can arrive inside the user's own tag string, not
+        # just from a caller that knows to pass numbered_pages. Cursor mode
+        # would then 500 past page 1 — or, via the windowed fallback, return
+        # confidently wrong results, since windows scramble a non-id sort.
+        if not numbered_pages and any(
+            t.lower().startswith("order:") for t in tags.split()
+        ):
+            numbered_pages = True
         # Danbooru caps a page at 200; comparing the short-page check against
         # the raw `limit` would end pagination after page 1 for limit > 200.
         page_size = min(limit, 200)

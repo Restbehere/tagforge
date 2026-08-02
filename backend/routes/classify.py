@@ -150,15 +150,22 @@ def stage2_reset(body: Stage2ResetBody, bg: BackgroundTasks) -> dict[str, Any]:
 
 @router.post("/stage3")
 def stage3(body: Stage3Body, bg: BackgroundTasks) -> dict[str, Any]:
-    if body.use_batch_api and body.provider != "openai":
-        raise HTTPException(
-            400,
-            "Batch API mode is OpenAI-only — set provider to 'openai' or "
-            "uncheck 'Use OpenAI Batch API'.",
-        )
-    job_id = jobs.create_job(
-        "classify_stage3", f"LLM ({body.provider}/{body.model})", body.model_dump()
-    )
+    if body.use_batch_api:
+        # A blank provider means "whatever Settings says" — resolve it before
+        # judging. Comparing the raw field rejected every batch run once the
+        # UI stopped sending an explicit provider.
+        from .. import llm_config
+
+        effective = body.provider or llm_config.get_target("stage3").kind
+        if effective != "openai":
+            raise HTTPException(
+                400,
+                "Batch API mode is OpenAI-only, but Stage 3 resolves to "
+                f"'{effective}' — switch it to OpenAI under Settings → LLM "
+                "providers or uncheck 'Use OpenAI Batch API'.",
+            )
+    label = f"{body.provider or 'configured endpoint'}/{body.model or 'configured model'}"
+    job_id = jobs.create_job("classify_stage3", f"LLM ({label})", body.model_dump())
     bg.add_task(_run_stage3, job_id, body.model_dump())
     return {"job_id": job_id}
 
@@ -335,6 +342,21 @@ def _run_stage1_reclassify(job_id: int, body: dict[str, Any]) -> None:
                     eligible = True
                 # Re-apply rules on top of older rule-based labels too.
                 elif src in ("unknown", "tag_tree") and tag.confidence < assignment.confidence:
+                    eligible = True
+                # Deterministic rule sources whose ANSWER changed. These carry
+                # the same confidence before and after, so the comparison above
+                # can never catch them — which left every tag mis-bucketed by a
+                # rule bug (wrong tag-tree parent, a hairstyle caught by the
+                # anatomy regex, a non-franchise qualifier) permanently stuck.
+                elif src in (
+                    "tag_tree",
+                    "franchise_suffix",
+                    "qualifier_rule",
+                    "scene_exclude",
+                ) and (
+                    tag.bucket != assignment.bucket
+                    or tag.bucket_source != assignment.bucket_source
+                ):
                     eligible = True
 
                 # No-op if Stage 1 produces the exact same bucket+source.
