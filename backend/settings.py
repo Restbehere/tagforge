@@ -111,31 +111,28 @@ TAG_TREE_PATH = DATA_DIR / "tag_tree.json"
 SEED_LABELS_PATH = DATA_DIR / "seed_labels.json"
 CLASSIFICATION_CACHE_PATH = DATA_DIR / "tag_classification_cache.json"
 
-# Optional: 194k Danbooru tags database from the Kohaku-NAI project.
-# Falls back gracefully if not present.
-KOHAKU_TAGS_JSONL = Path(
+# Optional: a 194k-row Danbooru ``tags.jsonl`` database, used as an
+# extra Stage-1 category signal. Falls back gracefully if absent.
+TAGS_JSONL_PATH = Path(
     _env(
-        "KOHAKU_TAGS_JSONL",
-        WORKSPACE_ROOT / "Kohaku-NAI" / "DATASET" / "danbooru-tags" / "tags.jsonl",
+        "TAGS_JSONL_PATH",
+        WORKSPACE_ROOT / "danbooru-tags" / "tags.jsonl",
     )
 )
 
-# Default export targets (a sibling Kohaku-NAI checkout, if you use one).
-# The Export endpoint can override these per-call.
-KOHAKU_WILDCARDS_DIR = Path(
+# Optional one-click export destinations, surfaced as pills on the
+# Export page. Point them at wherever your generation front-end reads
+# wildcards from. The Export endpoint can override them per-call.
+WILDCARDS_DIR = Path(
     _env(
-        "KOHAKU_WILDCARDS_DIR",
-        WORKSPACE_ROOT
-        / "Kohaku-NAI"
-        / "client_extensions"
-        / "kohaku-nai-wildcards"
-        / "wildcards",
+        "WILDCARDS_DIR",
+        WORKSPACE_ROOT / "wildcards",
     )
 )
-KOHAKU_COMMON_PROMPTS_DIR = Path(
+COMMON_PROMPTS_DIR = Path(
     _env(
-        "KOHAKU_COMMON_PROMPTS_DIR",
-        WORKSPACE_ROOT / "Kohaku-NAI" / "Common Dynamic Prompts",
+        "COMMON_PROMPTS_DIR",
+        WORKSPACE_ROOT / "common-prompts",
     )
 )
 EXPORTS_DIR = Path(_env("EXPORTS_DIR", PROJECT_ROOT / "exports"))

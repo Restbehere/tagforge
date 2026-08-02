@@ -2,7 +2,7 @@
 
 Stage 1 covers the deterministic, free portion of the pipeline:
 
-1. If a tag is present in the 194k Danbooru ``tags.jsonl`` file from Kohaku-NAI
+1. If a tag is present in an optional 194k-row Danbooru ``tags.jsonl``
    with category 1/4/5 (artist/character/meta) we route it to a drop bucket
    immediately.
 2. Otherwise, we look up the tag in the ``tag_tree.json`` taxonomy from
@@ -214,10 +214,10 @@ def _bucket_for_path(path_stack: Iterable[str]) -> str:
 
 @lru_cache(maxsize=1)
 def _load_dataset_categories() -> dict[str, dict]:
-    """Load Kohaku's ``tags.jsonl`` if present. Maps tag_name → {category, post_count}."""
-    path = settings.KOHAKU_TAGS_JSONL
+    """Load ``tags.jsonl`` if present. Maps tag_name → {category, post_count}."""
+    path = settings.TAGS_JSONL_PATH
     if not path.exists():
-        logger.info("Kohaku tags.jsonl not found at %s; skipping dataset categories", path)
+        logger.info("tags.jsonl not found at %s; skipping dataset categories", path)
         return {}
 
     out: dict[str, dict] = {}
@@ -239,7 +239,7 @@ def _load_dataset_categories() -> dict[str, dict]:
                 "category": int(entry.get("category", 0)),
                 "post_count": int(entry.get("post_count", 0)),
             }
-    logger.info("Loaded %d tags from Kohaku tags.jsonl", len(out))
+    logger.info("Loaded %d tags from tags.jsonl", len(out))
     return out
 
 

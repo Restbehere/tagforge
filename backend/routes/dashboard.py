@@ -78,6 +78,6 @@ def summary() -> dict[str, Any]:
             if settings.DEFAULT_METADATA_FILE
             else ""
         ),
-        "default_wildcards_dir": str(settings.KOHAKU_WILDCARDS_DIR),
-        "kohaku_tags_jsonl_exists": settings.KOHAKU_TAGS_JSONL.exists(),
+        "default_wildcards_dir": str(settings.WILDCARDS_DIR),
+        "tags_jsonl_exists": settings.TAGS_JSONL_PATH.exists(),
     }

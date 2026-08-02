@@ -14,7 +14,7 @@ export interface DashboardSummary {
   recent_jobs: JobSummary[];
   default_metadata_path: string;
   default_wildcards_dir: string;
-  kohaku_tags_jsonl_exists: boolean;
+  tags_jsonl_exists: boolean;
 }
 
 export interface JobSummary {

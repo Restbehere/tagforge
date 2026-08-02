@@ -23,7 +23,7 @@ workflow, and the things that confuse people on the first run.
 9. [Tags tab](#tags-tab) — manual overrides + Smart Classify
 10. [Trends tab](#trends-tab)
 11. [Builder tab](#builder-tab)
-12. [Export tab](#export-tab) — produce wildcard files for Kohaku-NAI
+12. [Export tab](#export-tab) — produce wildcard files
 13. [Headless CLI](#headless-cli)
 14. [Recommended end-to-end workflow](#recommended-end-to-end-workflow)
 15. [Troubleshooting](#troubleshooting)
@@ -218,7 +218,7 @@ things:
 
 Combine them: set scene rating to `s,q` (skip explicit-rated scenes
 altogether) **and** cap per-line to `s` (strip anything questionable that
-slipped through). Typical safe-for-Kohaku build: scene rating `g,s`, max
+slipped through). Typical safe build: scene rating `g,s`, max
 rating per line `s`.
 
 ---
@@ -234,7 +234,7 @@ Top-of-page counts:
 - **classifier_coverage** — fraction of unique tags assigned to a non-`other` bucket
 
 Below: tag distribution per bucket, recent job log, and detected paths
-(`metadata.txt`, Kohaku wildcards dir, `tags.jsonl` from the Kohaku-NAI
+(`metadata.txt`, wildcards dir, optional `tags.jsonl` from the
 dataset if present).
 
 The Dashboard auto-refreshes every 5 s, so you can leave it open in a
@@ -626,7 +626,7 @@ Click **Copy** to send it to the clipboard.
 ## Export tab
 
 This is the payoff — write fresh `outfit.txt`, `pose.txt`, etc. wildcard
-files for Kohaku-NAI.
+files for your generation front-end.
 
 1. **Name** — used for the manifest and the default output directory
 2. **File prefix** — optional. Prepends to every filename, e.g. prefix
@@ -644,8 +644,8 @@ files for Kohaku-NAI.
 8. **Origin** — `all | local | booru` toggle. Restricts to one provenance.
 9. **Output directory** — type a path or click one of the preset pills:
    - `tagforge_exports` → `<repo>\exports\<name>\`
-   - `kohaku_wildcards` → your Kohaku-NAI checkout's `client_extensions\kohaku-nai-wildcards\wildcards\` (drops straight into the generation pipeline; see `TAGFORGE_KOHAKU_*` env vars)
-   - `kohaku_common_prompts` → your Kohaku-NAI checkout's `Common Dynamic Prompts\`
+   - `wildcards` → wherever your generation front-end reads wildcards from (set `TAGFORGE_WILDCARDS_DIR`)
+   - `common_prompts` → a second destination of your choosing (set `TAGFORGE_COMMON_PROMPTS_DIR`)
 10. **Sources** — multi-select pills, now split under **Local imports** and
     **Booru fetches** headings with a `select all` shortcut per group. Empty
     selection = include everything (after the Origin / score / rating filters).
@@ -731,14 +731,14 @@ post creation date across many sources, that requires adding
 `Image.posted_at` and a column migration — worth doing then but
 unnecessary today.
 
-### Mapping to your existing Kohaku prompt
+### Mapping to your existing prompt
 
 Your existing prompt uses `__goodclothing4__`, `__goodexpression2__`, etc.
 To replace those with Tag Forge output:
 
 1. **Name**: pick a memorable name like `may2026`.
 2. **File prefix**: `good` (matches existing convention).
-3. **Output directory**: click the `kohaku_wildcards` preset.
+3. **Output directory**: click the `wildcards` preset.
 4. **Min tag count**: 2.
 5. **Origin**: `local` (only export from your own metadata.txt ingests).
 6. **Max rating per line**: `s` (sensitive) — strips any explicit/questionable
@@ -795,7 +795,7 @@ Common commands:
 
 :: 7) export wildcards (synchronous). New flags: --origin, --max-rating, --file-prefix
 .venv\Scripts\python -m backend.cli export may2026 ^
-    --out "C:\path\to\Kohaku-NAI\client_extensions\kohaku-nai-wildcards\wildcards" ^
+    --out "C:\path\to\your\wildcards" ^
     --origin local --rating s --max-rating s --file-prefix good --score-min 20
 
 :: 8) just run the API server (without the UI)
@@ -844,7 +844,7 @@ A typical "I just got 24k new images, refresh my wildcards" run:
    inferred rating + evidence tags so you can sanity-check the classifier.
 7. **Export tab**:
    - name: `may2026`, prefix: `good`
-   - output dir: click `kohaku_wildcards` preset
+   - output dir: click `wildcards` preset
    - origin: `local` (or leave `all` to include any Booru fetches too)
    - scene rating filter: `g,s` (skip explicit-rated scenes entirely)
    - max rating per line: `s` (strip any remaining explicit tokens per line)
@@ -854,7 +854,7 @@ A typical "I just got 24k new images, refresh my wildcards" run:
    a coherent outfit combo from one real image. Same for the others.
    `goodextras.txt` is the new one to browse — if most lines look like they
    belong in `pose`, tell me and we can fold extras→pose in the categorizer.
-9. **In Kohaku-NAI**: edit your main prompt to use `__goodoutfit__`,
+9. **In your generation front-end**: edit your main prompt to use `__goodoutfit__`,
    `__goodexpression__`, etc. Generate a few test images.
 10. **Iterate**: any wonky combos? Find them in **Scenes**, see which tags
     are off, fix in **Tags**, **Rebuild scene_line**, re-**Export**.

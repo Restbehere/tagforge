@@ -3,8 +3,8 @@
 A standalone local app that mines AI-image prompt metadata — your NovelAI
 `metadata.txt` dump and live Danbooru / AIBooru scrapes — classifies every tag
 into semantic buckets with a three-stage pipeline, and forges the results into
-**per-image-grouped wildcard files** that drop straight into
-`Kohaku-NAI/client_extensions/kohaku-nai-wildcards/wildcards/`.
+**per-image-grouped wildcard files**: plain `.txt`, one prompt fragment per
+line, which any wildcard-capable generation front-end can consume.
 
 ```
 metadata.txt (NAI/SD prompt dump)                     \
@@ -84,8 +84,9 @@ the bucket rejoined into a single comma-separated line:
 | `scene`       | outfit + pose + expression + background concatenated   |
 
 Export writes those rows as `outfit.txt`, `pose.txt`, … — each line is a
-complete, coherent slice of a real curated image, matching the Kohaku-NAI
-wildcard format directly.
+complete, coherent slice of a real curated image. The format is the common
+one: plain UTF-8 text, one wildcard option per line, no header, so the files
+drop into any tool that reads wildcard `.txt` files.
 
 ## Ingest
 
@@ -315,7 +316,8 @@ for a commented template.
 | `TAGFORGE_LLAMA_SWAP_URL` | local LLM server for the NAI splitter (default `http://127.0.0.1:8080`) |
 | `TAGFORGE_LLAMA_SWAP_BAT` / `TAGFORGE_LLAMA_SWAP_CONFIG` | optional: enable the in-app "start server" button and idle-TTL knob |
 | `TAGFORGE_SEETHROUGH_PYTHON` / `_DIR` / `_LAYERDIFF` / `_DEPTH` | Decompose tab: python env + repo checkouts |
-| `TAGFORGE_KOHAKU_TAGS_JSONL` / `_WILDCARDS_DIR` / `_COMMON_PROMPTS_DIR` | optional sibling Kohaku-NAI checkout paths |
+| `TAGFORGE_TAGS_JSONL` | optional path to a `tags.jsonl` Danbooru tag database, used as an extra Stage-1 signal |
+| `TAGFORGE_WILDCARDS_DIR` / `_COMMON_PROMPTS_DIR` | optional export shortcuts — point these at wherever your generation front-end reads wildcards from, and they show up as one-click destinations on the Export page |
 
 ## Versioning
 

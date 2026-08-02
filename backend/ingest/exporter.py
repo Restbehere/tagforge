@@ -2,7 +2,7 @@
 
 Reads ``scene_line`` rows filtered by user-supplied criteria and writes them
 into one ``.txt`` file per bucket -- one line per image-bucket combo. The
-output format matches Kohaku-NAI's existing wildcard files exactly so they're
+output format is the common wildcard convention (one option per line) so they're
 drop-in replacements.
 """
 

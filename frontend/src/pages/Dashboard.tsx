@@ -180,17 +180,17 @@ export function Dashboard() {
             </dd>
           </div>
           <div>
-            <dt className="pf-label">Kohaku-NAI wildcards dir</dt>
+            <dt className="pf-label">Wildcards export dir</dt>
             <dd className="break-all font-mono text-xs">
               {d?.default_wildcards_dir ?? "—"}
             </dd>
           </div>
           <div className="sm:col-span-2">
-            <dt className="pf-label">Kohaku tags.jsonl present</dt>
+            <dt className="pf-label">tags.jsonl present</dt>
             <dd className="text-xs">
               {!d ? (
                 <span className="text-text-subtle">—</span>
-              ) : d.kohaku_tags_jsonl_exists ? (
+              ) : d.tags_jsonl_exists ? (
                 <span className="text-accent-green">yes — used for category lookups</span>
               ) : (
                 <span className="text-text-muted">

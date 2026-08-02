@@ -156,8 +156,8 @@ def default_deny_tags() -> dict[str, list[str]]:
 def preset_dirs() -> dict[str, str]:
     return {
         "tagforge_exports": str(settings.EXPORTS_DIR),
-        "kohaku_wildcards": str(settings.KOHAKU_WILDCARDS_DIR),
-        "kohaku_common_prompts": str(settings.KOHAKU_COMMON_PROMPTS_DIR),
+        "wildcards": str(settings.WILDCARDS_DIR),
+        "common_prompts": str(settings.COMMON_PROMPTS_DIR),
     }
 
 

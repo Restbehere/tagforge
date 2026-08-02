@@ -6,7 +6,7 @@ product
 
 ## Users
 
-One power user (the developer/owner) running the app locally on a Windows desktop, usually in the evening, iterating fast: ingesting hundreds of thousands of AI-image prompt records, triaging tag classifications, watching trends, and exporting wildcard files for Kohaku-NAI image generation. Sessions are long, data-dense, and keyboard/mouse mixed. No mobile use, no second user.
+One power user (the developer/owner) running the app locally on a Windows desktop, usually in the evening, iterating fast: ingesting hundreds of thousands of AI-image prompt records, triaging tag classifications, watching trends, and exporting wildcard files for their image-generation front-end. Sessions are long, data-dense, and keyboard/mouse mixed. No mobile use, no second user.
 
 ## Product Purpose
 
