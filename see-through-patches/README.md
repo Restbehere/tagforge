@@ -1,6 +1,6 @@
 # see-through patches
 
-Local fixes to the vendored [see-through](https://github.com/nagadomi/see-through)
+Local fixes to the vendored [see-through](https://github.com/shitagaki-lab/see-through)
 pipeline that the Decompose tab drives. **A `git pull` in the see-through
 checkout will overwrite these** — re-apply from here if Decompose starts
 failing on images it used to handle.

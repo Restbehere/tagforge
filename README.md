@@ -177,8 +177,21 @@ Supporting machinery:
   modes (`previous period` / `1 week earlier` / `1 month earlier` / custom
   offset); per-source filter; inline bucket re-assignment from the table;
   top-N `.txt` export.
-- **Builder**: roll random per-bucket combinations into a prompt skeleton,
-  lock the buckets you like, reroll single buckets, copy to clipboard.
+- **Builder**: assemble a prompt by rolling per-bucket combinations from the
+  corpus. **Roll scene** takes every bucket from a single real image so the
+  combination is coherent; plain **Roll** fills each bucket independently.
+  Lock the buckets you like and reroll the rest, roll only from images
+  containing given tags, cap how often plain backgrounds appear, exclude
+  tags, filter by character count, and save the whole configuration as a
+  preset. Rolls are served from a background-filled pool so they feel
+  instant.
+- **NAI prompt splitter** (embedded in Builder and the Scenes detail panel):
+  sends a flat tag list to a local LLM (via
+  [llama-swap](https://github.com/mostlygeek/llama-swap)) and returns a
+  NovelAI V4.5 prompt — a scene-level base plus one prompt per character,
+  with optional natural-language scene description, identity stripping (swap
+  in your own characters), background invention, and art-directed in-image
+  dialogue. Fully local; the model loads on demand and unloads on idle.
 - **Scenes**: filterable, paginated browser over every ingested image with a
   per-bucket breakdown side panel and copy buttons for raw prompts and
   bucket lines.
@@ -194,6 +207,31 @@ Supporting machinery:
 - **named deny lists** (stored in DB, reusable across exports) plus ad-hoc
   paste-in deny tags
 - **export presets** — snapshot/restore the whole filter configuration
+
+## Image decomposition & rigging (optional)
+
+Two tabs turn a finished image into layered art and a live avatar. They are
+independent of the tag-mining flow and need extra local setup, so they are
+optional — the rest of the app runs without them.
+
+- **Decompose** (`/decompose`): drop an image (or pick a recently ingested
+  one) and run it through a local
+  [see-through](https://github.com/shitagaki-lab/see-through)
+  layer-decomposition pipeline. A single FIFO worker drains the queue,
+  streams progress from the pipeline's own output, and writes the results
+  to `backend/data/decompose/out/<id>/` — a layered `.psd` plus a folder of
+  per-layer transparent PNGs, which the tab lets you browse and open. All
+  processing is on your machine; nothing is uploaded. Requires the
+  see-through repo and its Python environment (`TAGFORGE_SEETHROUGH_*`).
+  Occluded subjects with no visible head are handled gracefully — the head
+  stage is skipped rather than failing the run (see `see-through-patches/`).
+- **Rig** (`/rig`): turns a decomposed PSD into a live 2.5D avatar —
+  blinking, lip-sync, hair physics, and optional webcam face tracking, plus
+  MP4 / WebM / GIF capture. Send a PSD straight from the Decompose tab, or
+  drop any layered `.psd` onto the viewer. Runs entirely in the browser via
+  a vendored, English-translated copy of
+  [Anime2.5DRig](https://github.com/852wa/Anime2.5DRig) (MIT, by 852wa) — no
+  server round-trip and no external calls.
 
 ## Jobs, persistence, and safety
 
