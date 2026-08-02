@@ -162,8 +162,15 @@ def _system_prompt() -> str:
     )
 
 
-def _get_openai_client() -> Any:
-    """Create one OpenAI client (thread-safe httpx pool, built-in retries)."""
+def _get_openai_client(
+    base_url: str = "", api_key: str = "", timeout: float = 90.0
+) -> Any:
+    """Create one OpenAI client (thread-safe httpx pool, built-in retries).
+
+    ``base_url`` points the same SDK at any OpenAI-compatible gateway
+    (OpenRouter, Together, Groq, a local server). Blank falls back to the
+    environment, so existing setups are untouched.
+    """
     try:
         from openai import OpenAI  # type: ignore
     except ImportError as exc:
@@ -173,31 +180,64 @@ def _get_openai_client() -> Any:
             "(installs `openai` + `anthropic`)"
         ) from exc
 
-    api_key = os.environ.get("OPENAI_API_KEY")
+    api_key = api_key or os.environ.get("OPENAI_API_KEY") or ""
     if not api_key:
         raise RuntimeError(
-            "OPENAI_API_KEY is not set. Add it to Tag Forge/.env "
-            "(copy .env.example and fill the key) or `set OPENAI_API_KEY=...` "
-            "in your shell before launching the backend."
+            "No API key for Stage 3. Set one under Settings → LLM providers, "
+            "or put OPENAI_API_KEY in Tag Forge/.env "
+            "(copy .env.example and fill the key)."
         )
-    return OpenAI(api_key=api_key, timeout=90.0)
+    kwargs: dict[str, Any] = {"api_key": api_key, "timeout": timeout}
+    if base_url:
+        kwargs["base_url"] = base_url
+    return OpenAI(**kwargs)
 
 
-def _call_openai(model: str, tags: list[str], client: Any = None) -> dict[str, str]:
+def _loads_lenient(raw: str) -> dict[str, str]:
+    """Parse a JSON object out of a model reply.
+
+    Only OpenAI proper honours ``response_format=json_object``; third-party
+    gateways may ignore it and wrap the object in prose or ```json fences.
+    Falling back to the outermost brace pair — which the Anthropic path
+    already did — keeps those endpoints usable.
+    """
+    raw = (raw or "").strip()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        start, end = raw.find("{"), raw.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return {}
+        try:
+            data = json.loads(raw[start : end + 1])
+        except json.JSONDecodeError:
+            return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _call_openai(
+    model: str,
+    tags: list[str],
+    client: Any = None,
+    send_temperature: bool = True,
+) -> dict[str, str]:
     if client is None:
         client = _get_openai_client()
     msg = [
         {"role": "system", "content": _system_prompt()},
         {"role": "user", "content": "Tags: " + ", ".join(tags)},
     ]
-    resp = client.chat.completions.create(
-        model=model,
-        messages=msg,  # type: ignore[arg-type]
-        response_format={"type": "json_object"},
-        temperature=0,
-    )
-    raw = resp.choices[0].message.content or "{}"
-    return json.loads(raw)
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": msg,
+        "response_format": {"type": "json_object"},
+    }
+    # The o-series and gpt-5 tier reject any explicit temperature; sending it
+    # 400s every batch. Off by config for those models.
+    if send_temperature:
+        body["temperature"] = 0
+    resp = client.chat.completions.create(**body)
+    return _loads_lenient(resp.choices[0].message.content or "{}")
 
 
 def _get_anthropic_client() -> Any:
@@ -351,19 +391,37 @@ def _apply_cache_to_tags(
 
 def reclassify_residuals(
     *,
-    provider: str = "openai",
-    model: str = "gpt-4o-mini",
+    provider: str = "",
+    model: str = "",
     batch_size: int = 50,
     max_tags: int | None = None,
-    concurrency: int = 6,
+    concurrency: int = 0,
     job_id: int | None = None,
     created_after: datetime | None = None,
 ) -> Stage3Result:
-    """Run the LLM over residual tags (those still bucket=other after stage 1+2)."""
+    """Run the LLM over residual tags (those still bucket=other after stage 1+2).
+
+    Blank ``provider``/``model``/``concurrency`` resolve from the Stage 3
+    setting (Settings → LLM providers), so callers that do not care — such
+    as the automatic post-ingest pass — always follow the user's choice
+    rather than defaulting to OpenAI.
+    """
+    from .. import llm_config
+
     start = datetime.now(timezone.utc)
+    target = llm_config.get_target("stage3")
+
+    # 'openai_compatible' shares OpenAI's request shape; only the endpoint
+    # and the availability of provider-only features differ.
+    provider = provider or ("openai" if target.uses_openai_sdk else target.kind)
+    if provider == "openai_compatible":
+        provider = "openai"
     if provider not in _DISPATCH:
         raise ValueError(f"unknown LLM provider: {provider}")
-    concurrency = max(1, min(12, int(concurrency)))
+    model = model or target.model or DEFAULT_MODEL
+    concurrency = int(concurrency) or target.max_concurrency
+    # Gateways on free/low tiers reject the default 6-way fan-out.
+    concurrency = max(1, min(12, concurrency, target.max_concurrency))
 
     cache = _load_cache()
 
@@ -396,7 +454,10 @@ def reclassify_residuals(
         # thread-safe (shared httpx pool, built-in retries).
         client = None
         if provider == "openai":
-            client = _get_openai_client()
+            client = _get_openai_client(
+                base_url=target.base_url if target.uses_openai_sdk else "",
+                api_key=target.api_key(),
+            )
         elif provider == "anthropic":
             client = _get_anthropic_client()
 
@@ -404,7 +465,12 @@ def reclassify_residuals(
             # Workers ONLY call the API and return the parsed dict (or raise);
             # cache/tally mutation happens on the main thread in the drain loop.
             if provider == "openai":
-                return _call_openai(model, names, client=client)
+                return _call_openai(
+                    model,
+                    names,
+                    client=client,
+                    send_temperature=target.send_temperature,
+                )
             if provider == "anthropic":
                 return _call_anthropic(model, names, client=client)
             return _DISPATCH[provider](model, names)

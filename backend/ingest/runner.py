@@ -297,17 +297,20 @@ def _classify_after_ingest(
     failing the whole ingest job. Returns a suffix for the done-message.
     """
     try:
+        from .. import llm_config
         from .stage3_llm import reclassify_residuals  # optional [llm] extra
 
+        # Follow the configured Stage 3 endpoint. Hardcoding OpenAI here used
+        # to send every newly-ingested tag there even when the user had
+        # pointed Stage 3 somewhere else — the exact leak they switch
+        # providers to avoid.
+        target = llm_config.get_target("stage3")
         jobs.update_job(
             job_id,
             progress=0.75,
-            message="classifying new tags (gpt-4o-mini)…",
+            message=f"classifying new tags ({target.describe()})…",
         )
         result = reclassify_residuals(
-            provider="openai",
-            model="gpt-4o-mini",
-            concurrency=6,
             job_id=job_id,
             created_after=created_after,
         )

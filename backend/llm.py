@@ -32,6 +32,40 @@ logger = logging.getLogger("tagforge.llm")
 DEFAULT_MODEL = "qwen3.6-27b-abliterated"
 
 
+def _chat_target(model: str | None) -> tuple[str, dict[str, str], str, bool]:
+    """Resolve (chat-completions URL, headers, model, supports_json_schema).
+
+    The splitter normally drives the bundled llama-swap server, but it can
+    be pointed at any OpenAI-compatible endpoint — useful because this
+    corpus is explicit and hosted models may refuse it. An explicit
+    ``model`` argument (the UI dropdown) still wins over the configured
+    default.
+    """
+    from . import llm_config
+
+    target = llm_config.get_target("splitter")
+    base = (target.base_url or settings.LLAMA_SWAP_URL).rstrip("/")
+    headers: dict[str, str] = {}
+    if not target.is_local:
+        key = target.api_key()
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+    chosen = model or target.model or DEFAULT_MODEL
+    # Providers publish their base URL with the version already on it
+    # ("https://openrouter.ai/api/v1"), so appending another /v1 would 404.
+    suffix = "/chat/completions" if base.endswith("/v1") else "/v1/chat/completions"
+    # llama.cpp constrains generation with the schema grammar, so JSON is
+    # guaranteed there. A third-party gateway may ignore json_schema, so we
+    # ask for the weaker json_object mode instead of getting prose back.
+    return f"{base}{suffix}", headers, chosen, target.is_local
+
+
+def _response_format(supports_schema: bool, name: str, schema: dict) -> dict:
+    if supports_schema:
+        return {"type": "json_schema", "json_schema": {"name": name, "schema": schema}}
+    return {"type": "json_object"}
+
+
 class LlmOutputError(RuntimeError):
     """The model returned a 200 with unusable content (truncated / not JSON)."""
 
@@ -330,19 +364,20 @@ def _repair_dialogue(
         + (f"Characters: {who}\n" if who else "")
         + f"Bubble: {bubble.upper()}\nText position: {text_position.upper()}\n"
     )
+    url, headers, model, local = _chat_target(model)
     try:
         with httpx.Client(timeout=httpx.Timeout(120.0, connect=5.0)) as c:
             r = c.post(
-                f"{settings.LLAMA_SWAP_URL}/v1/chat/completions",
+                url,
+                headers=headers,
                 json={
                     "model": model,
                     "temperature": 0.6,
                     "max_tokens": 200,
                     "chat_template_kwargs": {"enable_thinking": False},
-                    "response_format": {
-                        "type": "json_schema",
-                        "json_schema": {"name": "dialogue", "schema": _DIALOGUE_SCHEMA},
-                    },
+                    "response_format": _response_format(
+                        local, "dialogue", _DIALOGUE_SCHEMA
+                    ),
                     "messages": [
                         {"role": "system", "content": _DIALOGUE_REPAIR_SYSTEM},
                         {"role": "user", "content": user},
@@ -601,7 +636,7 @@ def nai_split(
     Blocking — the first request after idle loads the model (tens of
     seconds), so callers should use a generous timeout.
     """
-    model = model or DEFAULT_MODEL
+    url, headers, model, local = _chat_target(model)
     t0 = time.time()
     filtered_tags, character_names = _prefilter_tags(tags, strip_identity)
     if not filtered_tags:
@@ -636,16 +671,16 @@ def nai_split(
     try:
         with httpx.Client(timeout=httpx.Timeout(420.0, connect=5.0)) as c:
             r = c.post(
-                f"{settings.LLAMA_SWAP_URL}/v1/chat/completions",
+                url,
+                headers=headers,
                 json={
                     "model": model,
                     "temperature": 0.5 if include_speech else 0.15,
                     "max_tokens": 2048,
                     "chat_template_kwargs": {"enable_thinking": False},
-                    "response_format": {
-                        "type": "json_schema",
-                        "json_schema": {"name": "nai_prompt", "schema": _SPLIT_SCHEMA},
-                    },
+                    "response_format": _response_format(
+                        local, "nai_prompt", _SPLIT_SCHEMA
+                    ),
                     "messages": [
                         {"role": "system", "content": NAI_SYSTEM},
                         {"role": "user", "content": user},
@@ -743,20 +778,20 @@ def nai_split(
 def nai_compose(idea: str, model: str | None = None) -> dict[str, Any]:
     """Author a full NAI V4.5 prompt (base + characters + dialogue) from a
     free-text idea — memes, koma comics, anything. Creative temperature."""
-    model = model or DEFAULT_MODEL
+    url, headers, model, local = _chat_target(model)
     t0 = time.time()
     with httpx.Client(timeout=httpx.Timeout(420.0, connect=5.0)) as c:
         r = c.post(
-            f"{settings.LLAMA_SWAP_URL}/v1/chat/completions",
+            url,
+            headers=headers,
             json={
                 "model": model,
                 "temperature": 0.8,
                 "max_tokens": 2048,
                 "chat_template_kwargs": {"enable_thinking": False},
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {"name": "nai_prompt", "schema": _SPLIT_SCHEMA},
-                },
+                "response_format": _response_format(
+                    local, "nai_prompt", _SPLIT_SCHEMA
+                ),
                 "messages": [
                     {"role": "system", "content": NAI_COMPOSE_SYSTEM},
                     {"role": "user", "content": f"Idea:\n{idea}"},

@@ -97,6 +97,100 @@ def set_ttl(body: TtlIn) -> dict[str, Any]:
     return res
 
 
+class LlmFeatureConfigIn(BaseModel):
+    kind: Optional[Literal["openai", "openai_compatible", "anthropic", "local", "echo"]] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    max_concurrency: Optional[int] = Field(default=None, ge=1, le=12)
+    send_temperature: Optional[bool] = None
+    # Write-only: stored in api_credential and never read back.
+    api_key: Optional[str] = None
+
+
+class LlmConfigIn(BaseModel):
+    stage3: Optional[LlmFeatureConfigIn] = None
+    splitter: Optional[LlmFeatureConfigIn] = None
+
+
+def _config_payload() -> dict[str, Any]:
+    from .. import llm_config
+
+    return {
+        "config": llm_config.load_config(),
+        "key_hints": llm_config.key_hints(),
+        "suggested_models": llm_config.SUGGESTED_MODELS,
+        "kinds": list(llm_config.KINDS),
+    }
+
+
+@router.get("/config")
+def get_llm_config() -> dict[str, Any]:
+    """Endpoint settings plus masked key hints — never the keys themselves."""
+    return _config_payload()
+
+
+@router.put("/config")
+def put_llm_config(body: LlmConfigIn) -> dict[str, Any]:
+    from .. import llm_config
+
+    patch: dict[str, Any] = {}
+    for feature in ("stage3", "splitter"):
+        got: Optional[LlmFeatureConfigIn] = getattr(body, feature)
+        if got is None:
+            continue
+        fields = got.model_dump(exclude_none=True)
+        # The key goes to its own table, never into the config row.
+        key = fields.pop("api_key", None)
+        if key is not None:
+            llm_config.set_api_key(feature, key)
+        if fields:
+            patch[feature] = fields
+    if patch:
+        llm_config.save_config(patch)
+    return _config_payload()
+
+
+class LlmTestIn(BaseModel):
+    feature: Literal["stage3", "splitter"] = "stage3"
+
+
+@router.post("/config/test")
+def test_llm_config(body: LlmTestIn) -> dict[str, Any]:
+    """Round-trip one tiny request so misconfiguration surfaces here rather
+    than halfway through a long classification run."""
+    from .. import llm_config
+
+    target = llm_config.get_target(body.feature)
+    try:
+        if target.kind == "echo":
+            return {"ok": True, "detail": "echo provider — no network call"}
+        if target.is_local:
+            st = svc.server_status()
+            if not st.get("up"):
+                return {"ok": False, "detail": "local llama-swap server is not reachable"}
+            return {"ok": True, "detail": f"llama-swap up — {len(st.get('models', []))} model(s)"}
+        if target.kind == "anthropic":
+            return {"ok": False, "detail": "no test implemented for Anthropic yet"}
+
+        from ..ingest.stage3_llm import _get_openai_client
+
+        client = _get_openai_client(
+            base_url=target.base_url, api_key=target.api_key(), timeout=30.0
+        )
+        resp = client.chat.completions.create(
+            model=target.model,
+            messages=[{"role": "user", "content": "Reply with the single word: ok"}],
+            max_tokens=8,
+        )
+        got = (resp.choices[0].message.content or "").strip()
+        return {"ok": True, "detail": f"{target.describe()} replied: {got[:60]!r}"}
+    except Exception as exc:
+        # Never surface a key that a provider echoed back in an error URL.
+        from ..jobs import redact_secrets
+
+        return {"ok": False, "detail": redact_secrets(f"{type(exc).__name__}: {exc}")[:400]}
+
+
 class NaiComposeIn(BaseModel):
     idea: str = Field(min_length=3)
     model: Optional[str] = None

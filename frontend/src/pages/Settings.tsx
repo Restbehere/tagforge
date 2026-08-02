@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { Panel } from "@/components/Panel";
+import { LlmProviderPanel } from "@/components/LlmProviderPanel";
 import { ConfirmButton } from "@/components/forms";
 import { api } from "@/lib/api";
 import { ACCENTS, useTheme, type ThemeMode } from "@/lib/theme";
@@ -85,6 +86,8 @@ export function Settings() {
       </Panel>
 
       <MaintenancePanel />
+
+      <LlmProviderPanel />
 
       <Panel title="About">
         <dl className="space-y-2 text-sm">

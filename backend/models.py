@@ -201,11 +201,33 @@ class DenyList(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
+class ApiCredential(SQLModel, table=True):
+    """A stored API key, kept out of :class:`Preset` on purpose.
+
+    ``GET /api/presets`` returns every preset row's ``data_json`` verbatim,
+    so a key placed there would be readable over the API. Rows here are
+    NEVER serialized by any route — endpoints return only ``hint`` (the
+    last four characters) so the UI can show which key is set without ever
+    handing the value back.
+    """
+
+    __tablename__ = "api_credential"
+    __table_args__ = (UniqueConstraint("scope", "name", name="uq_cred_scope_name"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    scope: str = Field(index=True)  # e.g. 'llm_provider'
+    name: str = Field(index=True)  # e.g. 'stage3' | 'splitter'
+    value: str = ""
+    hint: str = ""  # "…a1b2" — safe to display
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
 class Preset(SQLModel, table=True):
     """A named snapshot of a form configuration (booru fetch, export, ...).
 
     ``kind`` scopes the namespace ('fetch' | 'export'); ``data_json`` holds
-    the serialized form fields. Credentials are never stored here.
+    the serialized form fields. Credentials are never stored here — see
+    :class:`ApiCredential`.
     """
 
     __tablename__ = "preset"

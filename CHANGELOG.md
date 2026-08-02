@@ -10,6 +10,52 @@ and `backend/pyproject.toml` — and read from there everywhere else (the
 sidebar footer, Settings → About, and `GET /api/health`). Bump both, and
 add an entry here, in the same commit as the change.
 
+## 0.8.0 — 2026-08-02
+
+### Added
+- **Configurable LLM endpoints** (`Settings → LLM providers`). Tag
+  classification and the NAI prompt splitter each point wherever you like
+  — OpenAI, any OpenAI-compatible gateway (OpenRouter, Groq, Together, a
+  self-hosted server), Anthropic, or the bundled local llama-swap — with
+  your own base URL, API key and model name. They are configured
+  independently on purpose: this corpus is explicit, and hosted models may
+  refuse or quietly soften it, so classification can go to an open-weights
+  endpoint without giving up a local splitter.
+
+  A **Test** button round-trips one tiny request so a bad URL, key or
+  model name surfaces immediately instead of halfway through a long run.
+  Model is free text with suggestions; concurrency is adjustable because
+  shared gateways rate-limit the default 6-way fan-out.
+
+- API keys live in a new `api_credential` table, never in a preset — the
+  presets endpoint returns every row's data verbatim, so a key stored
+  there would be readable over the API. No endpoint ever returns a key;
+  only a masked hint. Existing `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
+  environment variables keep working as fallbacks.
+
+### Fixed
+- **Automatic post-ingest classification ignored your provider choice.**
+  It hardcoded OpenAI + gpt-4o-mini, so every newly-ingested tag went to
+  OpenAI even after Stage 3 had been pointed elsewhere — precisely the
+  leak that switching providers is meant to prevent. It now follows the
+  configured endpoint.
+- The OpenAI classification path now tolerates replies wrapped in prose or
+  ``` fences (the Anthropic path already did). Only OpenAI proper honours
+  `response_format=json_object`; gateways that ignore it used to fail the
+  whole batch.
+- `temperature` is now optional per endpoint. Reasoning models (o-series,
+  gpt-5) reject an explicit temperature and would have errored on every
+  request.
+- Base URLs are joined correctly whether or not they already end in `/v1`,
+  so a pasted `https://openrouter.ai/api/v1` no longer becomes `/v1/v1/`.
+- The splitter degrades from `json_schema` to `json_object` on non-local
+  endpoints, since grammar-constrained output is a llama.cpp feature.
+
+### Changed
+- Default OpenAI model for Stage 3 is now `gpt-4.1-mini` (was
+  `gpt-4o-mini`) — same cheap/fast tier, better at holding the JSON-map
+  instruction across 50 tags, and still accepts a plain `temperature`.
+
 ## 0.7.0 — 2026-08-02
 
 ### Added

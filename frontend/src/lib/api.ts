@@ -863,7 +863,44 @@ export interface NaiSplitResult {
   secs: number;
 }
 
+export type LlmKind =
+  | "openai"
+  | "openai_compatible"
+  | "anthropic"
+  | "local"
+  | "echo";
+
+export interface LlmFeatureConfig {
+  kind: LlmKind;
+  base_url: string;
+  model: string;
+  max_concurrency: number;
+  send_temperature: boolean;
+}
+
+export interface LlmConfigResponse {
+  config: { stage3: LlmFeatureConfig; splitter: LlmFeatureConfig };
+  /** Masked only — the key itself is never returned. */
+  key_hints: { stage3: string; splitter: string };
+  suggested_models: { stage3: string[]; splitter: string[] };
+  kinds: LlmKind[];
+}
+
 export const llmApi = {
+  getConfig: () => request<LlmConfigResponse>("/llm/config"),
+  putConfig: (body: {
+    stage3?: Partial<LlmFeatureConfig> & { api_key?: string };
+    splitter?: Partial<LlmFeatureConfig> & { api_key?: string };
+  }) =>
+    request<LlmConfigResponse>("/llm/config", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  testConfig: (feature: "stage3" | "splitter") =>
+    request<{ ok: boolean; detail: string }>("/llm/config/test", {
+      method: "POST",
+      body: JSON.stringify({ feature }),
+    }),
   status: () => request<LlmStatus>("/llm/status"),
   start: () =>
     request<LlmStatus & { started: boolean; error?: string }>("/llm/start", {
