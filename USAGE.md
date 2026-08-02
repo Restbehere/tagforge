@@ -87,7 +87,7 @@ coherent outfit combinations, each one pulled from a real curated image.
 
 ### Why so many tags go into `other`
 
-The 24k prompt dump contains a lot of things that don't belong in any of the
+A large prompt dump contains a lot of things that don't belong in any of the
 seven wildcard buckets:
 
 - **Character / body**: `1girl`, `1boy`, `solo`, `mature_female`, `huge_breasts`, `voluptuous`, `bare_shoulders`, `collarbone`, `thighs`, `navel`, `cleavage` … (you control these via your character prompt, not a wildcard)
@@ -158,8 +158,8 @@ Three places let you filter by origin:
 - **Export** — same toggle plus the Sources picker is split into "Local
   imports" and "Booru fetches" headings, each with a one-click "select all"
   shortcut. Pick `local`, hit *select all* under Local imports → exports only
-  draw from your 24k pixiv dump. Pick `booru` → exports only draw from Danbooru
-  scrapes.
+  draw from your local metadata imports. Pick `booru` → exports only draw from
+  Danbooru scrapes.
 
 You can also pass `--origin local` (or `booru`) to the `export` CLI command.
 
@@ -279,7 +279,7 @@ directly.
    `(source_id, external_id)` rows are reused, their `scene_line` rows are
    rebuilt.
 
-24k images takes roughly 5-15 minutes on a modern SSD.
+Tens of thousands of images take roughly 5-15 minutes on a modern SSD.
 
 ### Fetch from Booru
 
@@ -578,8 +578,8 @@ A bar chart on top of the 25 highest-ratio tags, then a full table with
 `recent`, `baseline`, and `(recent+1)/(baseline+1)` ratio.
 
 This is only meaningful **after** you've ingested Booru fetches over time
-(the Trends tab needs `Image.created_at` spread across multiple days). The
-local 24k metadata dump all gets ingested with `created_at ≈ now`, so to use
+(the Trends tab needs `Image.created_at` spread across multiple days). A
+local metadata dump all gets ingested with `created_at ≈ now`, so to use
 Trends you need to either:
 
 1. Run a few daily `popular` / `rank` Booru fetches over the course of a
@@ -809,7 +809,7 @@ via `POST /api/danbooru/fetch` (see `backend/routes/danbooru.py`).
 
 ## Recommended end-to-end workflow
 
-A typical "I just got 24k new images, refresh my wildcards" run:
+A typical "just ingested a batch of new images, refresh my wildcards" run:
 
 1. *(Optional)* **Wipe previous ingest** — if you want a clean baseline after
    a schema change or a category bump:

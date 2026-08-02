@@ -136,7 +136,7 @@ function MetadataIngestCard() {
             className="pf-input mt-1"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
-            placeholder="e.g. May2026 pixiv batch"
+            placeholder="e.g. my-may-batch"
           />
         </div>
       </div>
