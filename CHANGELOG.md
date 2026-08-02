@@ -10,6 +10,16 @@ and `backend/pyproject.toml` — and read from there everywhere else (the
 sidebar footer, Settings → About, and `GET /api/health`). Bump both, and
 add an entry here, in the same commit as the change.
 
+## 0.8.2 — 2026-08-02
+
+### Fixed
+- Saving a provider change now refreshes the splitter panel straight away.
+  It previously waited for that panel's 15-second status poll — and since
+  the panel is unmounted while you're on Settings, the 30-second global
+  `staleTime` meant navigating back to Builder could still render the old
+  endpoint. The save now invalidates the status query with
+  `refetchType: "all"`, so the cache is warm before you get there.
+
 ## 0.8.1 — 2026-08-02
 
 ### Fixed
