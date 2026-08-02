@@ -1,0 +1,132 @@
+--- a/common/utils/inference_utils.py
++++ b/common/utils/inference_utils.py
+@@ -140,45 +140,92 @@
+         head_img = images[2]
+         # head_img = np.array(Image.open(osp.join(saved, 'head.png')))
+ 
+         head_tag_list = ['headwear', 'face', 'irides', 'eyebrow', 'eyewhite', 'eyelash', 'eyewear', 'ears', 'earwear', 'nose', 'mouth']
+-        hx0, hy0, hw, hh = cv2.boundingRect(cv2.findNonZero((head_img[..., -1] > 15).astype(np.uint8)))
+-        
+-        hx = int(hx0 * scale) - pad_pos[0]
+-        hy = int(hy0 * scale) - pad_pos[1]
+-        hw = int(hw * scale)
+-        hh = int(hh * scale)
+-        input_head, (hx1, hy1, hx2, hy2) = _crop_head(input_img, [hx, hy, hw, hh])
+-        hx1 = int(hx1 / scale + pad_pos[0] / scale)
+-        hy1 = int(hy1 / scale + pad_pos[1] / scale)
+-        ih, iw = input_head.shape[:2]
+-        input_head, pad_size, pad_pos = center_square_pad_resize(input_head, resolution, return_pad_info=True)
+-
+-        Image.fromarray(input_head).save(osp.join(saved, 'src_head.png'))
+-
+-        pipeline_output = pipeline(
+-            strength=1.0,
+-            num_inference_steps=num_inference_steps,
+-            batch_size=1,
+-            generator=rng,
+-            guidance_scale=1.0,
+-            prompt=head_tag_list,
+-            negative_prompt='',
+-            fullpage=input_head,
+-            group_index=1
+-        )
+-        canvas = np.zeros((resolution, resolution, 4), dtype=np.uint8)
+-
+-        py1, py2, px1, px2 = (np.array([pad_pos[1], pad_pos[1] + ih, pad_pos[0], pad_pos[0] + iw]) / scale).astype(np.int64)
+-        
+-        scale_size = (int(pad_size[0] / scale), int(pad_size[1] / scale))
+-
+-        for rst, tag in zip(pipeline_output.images, head_tag_list):
+-            rst = smart_resize(rst, scale_size)[py1: py2, px1: px2]
+-            full = canvas.copy()
+-            full[hy1: hy1 + rst.shape[0], hx1: hx1 + rst.shape[1]] = rst
+-            savename = osp.join(saved, f'{tag}.png')
+-            Image.fromarray(full).save(savename)
++
++        def _save_blank_head_layers():
++            """Write fully transparent stand-ins for the head detail layers.
++
++            The stage-1 layers, the depth pass and the PSD assembly all skip
++            empty layers already (io_utils.load_part ignores anything with
++            fewer than 5 opaque pixels), so blank files let the run finish
++            with whatever body parts were found instead of aborting.
++            """
++            blank = np.zeros_like(head_img)
++            for _tag in head_tag_list:
++                Image.fromarray(blank).save(osp.join(saved, f'{_tag}.png'))
++
++        # An image with no visible head (fully draped/occluded subject, a
++        # back view, a crop above the shoulders) yields an all-transparent
++        # head layer. cv2.findNonZero then returns None and boundingRect
++        # gives (0,0,0,0), which used to propagate into a 0x0 crop and blow
++        # up inside cv2.resize with a bare "!ssize.empty()" assertion.
++        head_nz = cv2.findNonZero((head_img[..., -1] > 15).astype(np.uint8))
++        if head_nz is None:
++            print('[see-through] no head found in this image - skipping the head detail pass')
++            _save_blank_head_layers()
++            return
++
++        try:
++            hx0, hy0, hw, hh = cv2.boundingRect(head_nz)
++
++            hx = int(hx0 * scale) - pad_pos[0]
++            hy = int(hy0 * scale) - pad_pos[1]
++            hw = int(hw * scale)
++            hh = int(hh * scale)
++            input_head, (hx1, hy1, hx2, hy2) = _crop_head(input_img, [hx, hy, hw, hh])
++            # Guard the crop itself: negative offsets (a head bbox that maps
++            # outside the unpadded image) make numpy return an empty view
++            # rather than raising, and a few-pixel crop is useless anyway.
++            if input_head.size == 0 or min(input_head.shape[:2]) < 8:
++                print(f'[see-through] head crop came out empty ({input_head.shape}) - skipping the head detail pass')
++                _save_blank_head_layers()
++                return
++            hx1 = int(hx1 / scale + pad_pos[0] / scale)
++            hy1 = int(hy1 / scale + pad_pos[1] / scale)
++            ih, iw = input_head.shape[:2]
++            input_head, pad_size, pad_pos = center_square_pad_resize(input_head, resolution, return_pad_info=True)
++
++            Image.fromarray(input_head).save(osp.join(saved, 'src_head.png'))
++
++            pipeline_output = pipeline(
++                strength=1.0,
++                num_inference_steps=num_inference_steps,
++                batch_size=1,
++                generator=rng,
++                guidance_scale=1.0,
++                prompt=head_tag_list,
++                negative_prompt='',
++                fullpage=input_head,
++                group_index=1
++            )
++            canvas = np.zeros((resolution, resolution, 4), dtype=np.uint8)
++
++            py1, py2, px1, px2 = (np.array([pad_pos[1], pad_pos[1] + ih, pad_pos[0], pad_pos[0] + iw]) / scale).astype(np.int64)
++
++            scale_size = (int(pad_size[0] / scale), int(pad_size[1] / scale))
++
++            for rst, tag in zip(pipeline_output.images, head_tag_list):
++                rst = smart_resize(rst, scale_size)[py1: py2, px1: px2]
++                full = canvas.copy()
++                # Clip to the canvas: a head near an edge can otherwise index
++                # past it and raise a broadcast error.
++                ch = min(rst.shape[0], full.shape[0] - hy1)
++                cw = min(rst.shape[1], full.shape[1] - hx1)
++                if ch <= 0 or cw <= 0:
++                    savename = osp.join(saved, f'{tag}.png')
++                    Image.fromarray(canvas.copy()).save(savename)
++                    continue
++                full[hy1: hy1 + ch, hx1: hx1 + cw] = rst[:ch, :cw]
++                savename = osp.join(saved, f'{tag}.png')
++                Image.fromarray(full).save(savename)
++        except Exception as _head_exc:
++            # Last-resort net: the body layers are already on disk and are
++            # what most runs are after, so degrade to "no head detail"
++            # instead of losing the whole job.
++            print(f'[see-through] head detail pass failed ({type(_head_exc).__name__}: {_head_exc}) - continuing without it')
++            _save_blank_head_layers()
++            return
+ 
+     else:
+         raise
+ 

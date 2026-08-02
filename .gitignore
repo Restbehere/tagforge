@@ -1,0 +1,51 @@
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / Vite
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Tag Forge data & build artefacts
+# (tag_classification_cache.json IS tracked on purpose — it holds paid LLM
+# verdicts with sorted keys, so diffs stay clean and the asset survives.)
+# glob covers tagforge.db and the pre-rename promptfinder.db
+backend/data/*.db
+backend/data/*.db-shm
+backend/data/*.db-wal
+backend/data/backups/
+backend/data/decompose/
+# third-party dataset (no redistribution license) — fetched at setup by
+# `python scripts/seed_tag_tree.py`
+backend/data/tag_tree.json
+exports/
+*.bak
+# see-through pipeline drops date-stamped logs in the launch cwd
+gude-*.log
+
+# Rig viewer sample artwork (third-party art, not covered by the vendored
+# MIT license — supply your own PSDs; the viewer falls back to built-in
+# generic art for the eye/mouth overlays)
+frontend/public/anime25drig/*.psd
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Tooling caches
+.impeccable/

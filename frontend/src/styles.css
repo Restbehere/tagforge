@@ -1,0 +1,350 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Theme variables. HSL channels only (no hsl() wrapper) so Tailwind's
+ * `hsl(var(--x) / <alpha-value>)` alpha modifiers work.
+ *
+ * SOURCE ORDER IS LOAD-BEARING — [data-accent] ties with .dark on
+ * specificity (0,1,0), so the cascade must run:
+ *   :root -> [data-accent] (light) -> .dark -> .dark[data-accent]
+ */
+@layer base {
+  /* ---------- Light (default) ---------- */
+  :root {
+    color-scheme: light;
+    --bg: 220 20% 97%;
+    --bg-panel: 0 0% 100%;
+    --bg-subtle: 220 16% 94%;
+    --bg-hover: 220 14% 90%;
+    --line: 220 13% 87%;
+    --line-strong: 220 12% 76%;
+    --text: 224 30% 12%;
+    --text-muted: 220 9% 38%;
+    --text-subtle: 220 7% 48%;
+    --brand: 265 70% 48%;
+    --brand-fg: 0 0% 100%;
+    --brand-subtle: 265 85% 93%;
+    --accent-green: 155 65% 30%;
+    --accent-amber: 36 90% 36%;
+    --accent-rose: 355 75% 44%;
+    --accent-cyan: 195 90% 32%;
+    --shadow-panel:
+      0 1px 2px hsl(220 40% 10% / 0.05),
+      0 2px 8px -2px hsl(220 40% 10% / 0.08);
+    --aurora-1: hsl(var(--brand) / 0.1);
+    --aurora-2: hsl(190 80% 45% / 0.06);
+    --aurora-3: hsl(var(--brand) / 0.05);
+    --dots-opacity: 0;
+    --spotlight-opacity: 0;
+    --scrollbar-thumb: 220 12% 80%;
+    --scrollbar-thumb-hover: 220 12% 70%;
+    --noise-opacity: 0.015;
+    /* Chevron for custom-styled <select> — encoded stroke ~ --text-muted. */
+    --select-chevron: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23585e6a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>");
+  }
+
+  /* ---------- Light accent presets ---------- */
+  [data-accent="cyan"] {
+    --brand: 195 90% 34%;
+    --brand-fg: 0 0% 100%;
+    --brand-subtle: 195 85% 92%;
+  }
+  [data-accent="emerald"] {
+    --brand: 160 84% 27%;
+    --brand-fg: 0 0% 100%;
+    --brand-subtle: 155 70% 92%;
+  }
+  [data-accent="rose"] {
+    --brand: 350 80% 46%;
+    --brand-fg: 0 0% 100%;
+    --brand-subtle: 350 85% 94%;
+  }
+
+  /* ---------- Dark (original palette, verbatim) ---------- */
+  .dark {
+    color-scheme: dark;
+    --bg: 220 18% 7%;
+    --bg-panel: 220 16% 10%;
+    --bg-subtle: 220 14% 13%;
+    --bg-hover: 220 13% 17%;
+    --line: 220 13% 18%;
+    --line-strong: 220 13% 26%;
+    --text: 220 14% 92%;
+    --text-muted: 220 8% 60%;
+    --text-subtle: 220 6% 45%;
+    --brand: 265 80% 65%;
+    --brand-fg: 0 0% 100%;
+    --brand-subtle: 265 70% 18%;
+    --accent-green: 155 70% 50%;
+    --accent-amber: 40 90% 55%;
+    --accent-rose: 0 75% 60%;
+    --accent-cyan: 190 80% 55%;
+    --shadow-panel:
+      0 1px 0 0 hsl(220 13% 100% / 0.04) inset,
+      0 1px 4px hsl(0 0% 0% / 0.35);
+    --aurora-1: hsl(var(--brand) / 0.24);
+    --aurora-2: hsl(190 80% 50% / 0.13);
+    --aurora-3: hsl(var(--brand) / 0.13);
+    --dots-opacity: 1;
+    --spotlight-opacity: 1;
+    --scrollbar-thumb: 220 13% 22%;
+    --scrollbar-thumb-hover: 220 13% 30%;
+    --noise-opacity: 0.05;
+    --select-chevron: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23909aa8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>");
+  }
+
+  /* ---------- Dark accent presets ---------- */
+  .dark[data-accent="cyan"] {
+    --brand: 190 85% 55%;
+    --brand-fg: 200 60% 10%;
+    --brand-subtle: 195 80% 15%;
+  }
+  .dark[data-accent="emerald"] {
+    --brand: 155 70% 48%;
+    --brand-fg: 160 60% 8%;
+    --brand-subtle: 155 70% 14%;
+  }
+  .dark[data-accent="rose"] {
+    --brand: 350 75% 54%;
+    --brand-fg: 0 0% 100%;
+    --brand-subtle: 350 70% 16%;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bg text-text font-sans antialiased;
+}
+
+/* Aurora backdrop — large blurred color fields drifting very slowly.
+   Bottom layer of the backdrop stack (aurora → grain → dots → content). */
+body::after {
+  content: "";
+  position: fixed;
+  inset: -25%;
+  z-index: -2;
+  pointer-events: none;
+  background-image:
+    radial-gradient(ellipse 42% 32% at 22% 24%, var(--aurora-1), transparent 70%),
+    radial-gradient(ellipse 36% 28% at 78% 14%, var(--aurora-2), transparent 70%),
+    radial-gradient(ellipse 48% 36% at 55% 84%, var(--aurora-3), transparent 70%);
+  filter: blur(70px);
+  transform: translate3d(0, 0, 0);
+  animation: pf-aurora 55s ease-in-out infinite alternate;
+}
+
+@keyframes pf-aurora {
+  0% {
+    transform: translate3d(-3%, -2%, 0) rotate(0deg) scale(1);
+  }
+  50% {
+    transform: translate3d(2%, 3%, 0) rotate(4deg) scale(1.06);
+  }
+  100% {
+    transform: translate3d(4%, -3%, 0) rotate(-3deg) scale(1.02);
+  }
+}
+
+/* Fine grain above the aurora — adds material depth and kills banding
+   on the large blurred radials. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: var(--noise-opacity);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='128' height='128' filter='url(%23n)'/></svg>");
+}
+
+/* Dot-grid texture across the top of the viewport (dark mode only via
+   --dots-opacity). Negative z keeps it under panels and content. */
+.pf-dots {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 45vh;
+  z-index: -1;
+  pointer-events: none;
+  opacity: var(--dots-opacity);
+  background-image: radial-gradient(
+    circle,
+    hsl(var(--text) / 0.055) 1px,
+    transparent 1px
+  );
+  background-size: 24px 24px;
+  -webkit-mask-image: linear-gradient(to bottom, black 20%, transparent);
+  mask-image: linear-gradient(to bottom, black 20%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::after {
+    animation: none;
+  }
+}
+
+* {
+  scrollbar-color: hsl(var(--scrollbar-thumb)) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--scrollbar-thumb));
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--scrollbar-thumb-hover));
+}
+
+/* shadcn-style component classes */
+@layer components {
+  /* No backdrop-filter here: the aurora backdrop animates every frame, and
+     backdrop-blur would force each panel to re-blur its backdrop per frame
+     (continuous GPU cost). 80%-alpha over the pre-blurred aurora looks the
+     same. */
+  .pf-panel {
+    @apply relative rounded-xl border border-line bg-bg-panel/80 shadow-panel;
+  }
+
+  .pf-input {
+    @apply h-9 w-full rounded-md border border-line bg-bg-subtle px-3 text-sm
+           text-text placeholder:text-text-subtle focus:border-brand
+           focus:outline-none focus:ring-2 focus:ring-brand/30 transition;
+  }
+
+  /* Native <select> chrome (UA arrow well + square hover outline) clashes
+     with the rounded fields — replace it with our own chevron. */
+  select.pf-input {
+    @apply cursor-pointer pr-8 hover:border-line-strong;
+    appearance: none;
+    background-image: var(--select-chevron);
+    background-repeat: no-repeat;
+    background-position: right 0.55rem center;
+    background-size: 14px 14px;
+  }
+
+  /* Native number spinners render as white UA boxes on hover in dark mode.
+     Hide them — typing and keyboard arrows still work. */
+  input[type="number"].pf-input {
+    appearance: textfield;
+    -moz-appearance: textfield;
+  }
+  input[type="number"].pf-input::-webkit-inner-spin-button,
+  input[type="number"].pf-input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    appearance: none;
+    margin: 0;
+  }
+
+  .pf-btn {
+    @apply inline-flex h-9 select-none items-center justify-center gap-2 rounded-md
+           border border-line bg-bg-subtle px-3 text-sm font-medium text-text
+           transition hover:bg-bg-hover focus-visible:outline-none
+           focus-visible:ring-2 focus-visible:ring-brand/40
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .pf-btn-primary {
+    @apply pf-btn border-brand bg-brand text-brand-fg hover:bg-brand/90
+           focus-visible:ring-brand;
+  }
+
+  .pf-btn-ghost {
+    @apply pf-btn border-transparent bg-transparent hover:bg-bg-subtle;
+  }
+
+  .pf-pill {
+    @apply inline-flex items-center gap-1 rounded-full border border-line
+           bg-bg-subtle px-2 py-0.5 text-xs text-text-muted;
+  }
+
+  .pf-section-title {
+    @apply text-xs font-semibold uppercase tracking-wider text-text-muted;
+  }
+
+  .pf-stat {
+    @apply font-mono text-2xl font-semibold text-text;
+  }
+
+  .pf-label {
+    @apply text-xs font-medium text-text-muted;
+  }
+
+  .pf-divider {
+    @apply h-px w-full bg-line;
+  }
+}
+
+@keyframes pulse-brand {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Bucket badge base shape. Per-bucket colors live in src/lib/buckets.ts
+   (literal class strings — Tailwind's scanner can't see composed names). */
+.pf-bucket {
+  @apply rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide;
+}
+
+/* Cursor-tracking spotlight on panels. Panel/Stat set --spot-x/--spot-y
+   via onMouseMove; only visible in dark mode (--spotlight-opacity). */
+.pf-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s;
+  background: radial-gradient(
+    240px circle at var(--spot-x, 50%) var(--spot-y, 50%),
+    hsl(var(--brand) / 0.07),
+    transparent 65%
+  );
+}
+.pf-panel:hover::before {
+  opacity: var(--spotlight-opacity);
+}
+
+/* Click-spark rays (ClickSpark component). */
+.pf-spark {
+  position: absolute;
+  width: 2px;
+  height: 9px;
+  border-radius: 1px;
+  background: hsl(var(--brand));
+  pointer-events: none;
+  transform-origin: center bottom;
+  animation: pf-spark 0.45s ease-out forwards;
+}
+@keyframes pf-spark {
+  from {
+    opacity: 1;
+    transform: rotate(var(--spark-angle)) translateY(-6px) scaleY(1);
+  }
+  to {
+    opacity: 0;
+    transform: rotate(var(--spark-angle)) translateY(-24px) scaleY(0.5);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pf-spark {
+    display: none;
+  }
+  .pf-panel::before {
+    transition: none;
+  }
+}

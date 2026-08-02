@@ -1,0 +1,15 @@
+# Normalise line endings in the repo so a Windows checkout never produces a
+# whole-file diff. Text is stored LF; Windows scripts keep CRLF because cmd
+# and PowerShell can misparse LF-only files.
+* text=auto
+
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.sh  text eol=lf
+
+# Vendored/minified assets and binaries: never touched, never diffed.
+frontend/public/anime25drig/lib/*.js -text -diff
+*.psd binary
+*.woff2 binary
+*.png binary
+*.jpg binary
