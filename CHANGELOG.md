@@ -10,6 +10,33 @@ and `backend/pyproject.toml` — and read from there everywhere else (the
 sidebar footer, Settings → About, and `GET /api/health`). Bump both, and
 add an entry here, in the same commit as the change.
 
+## 0.7.0 — 2026-08-02
+
+### Added
+- **Read prompts straight out of images** (`Ingest → Read images directly`).
+  Point it at a folder and it pulls each image's embedded generation
+  metadata itself — no separate extractor tool and no `metadata.txt` in
+  between. Handles NovelAI stealth-PNG (the gzipped JSON hidden in the
+  alpha channel's least significant bits), NovelAI's plain PNG text
+  chunks, and Stable Diffusion WebUI `parameters` strings. Preview a
+  sample before committing to a long run; images carrying no metadata
+  are reported as such rather than counted as failures.
+
+  Records are built identically to the `metadata.txt` path — including
+  preferring NAI V4's resolved `actual_prompts` caption and expanding
+  `|| a | b ||` option blocks — so everything downstream is unchanged and
+  the two import routes are interchangeable.
+
+  Adds Pillow and numpy to the backend requirements.
+
+### Fixed
+- The ported LSB reader no longer hangs on truncated data. The original
+  silently stopped producing bits once it ran past the last pixel, so the
+  byte loop spun forever (the old tool papered over it with a per-image
+  timeout). Exhaustion is now an explicit failure, so such an image is
+  reported as carrying no metadata instead of stalling or yielding a
+  half-decoded record.
+
 ## 0.6.0 — 2026-07-31
 
 ### Added

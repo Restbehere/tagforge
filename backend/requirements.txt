@@ -7,3 +7,8 @@ python-multipart>=0.0.9
 sse-starlette>=2.1
 tenacity>=9.0
 typer>=0.12
+# Reading generation metadata straight out of image files (Ingest → folder).
+# numpy carries the LSB/alpha-channel bit walk, which is far too slow per-pixel
+# in pure Python.
+pillow>=10.0
+numpy>=1.26

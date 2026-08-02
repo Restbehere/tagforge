@@ -23,6 +23,7 @@ from sqlmodel import Session, select
 from .. import db, jobs, settings
 from ..models import Image, ImageTag, SceneLine, Source, Tag, TagBucketOverride
 from .danbooru_client import DanbooruClient, Post
+from .image_extract import count_images, iter_image_records
 from .metadata_parser import MetadataRecord, count_records, iter_metadata_records
 from .prompt_cleaner import clean_prompt
 from .scene_exclude import filter_tag_names_for_scene, is_scene_excluded
@@ -473,6 +474,149 @@ def run_metadata_ingest(
         )
     except Exception as exc:
         logger.exception("metadata ingest failed")
+        jobs.update_job(job_id, status="error", error=str(exc), finished=True)
+
+
+def run_image_folder_ingest(
+    job_id: int,
+    folder: Path,
+    label: str,
+    recursive: bool = True,
+    drop_artist_tags: bool = True,
+    drop_quality_tags: bool = True,
+    drop_character_tags: bool = False,
+    classify_after: bool = False,
+    batch_size: int = 500,
+) -> None:
+    """Read generation metadata straight out of a folder of images.
+
+    Same destination as :func:`run_metadata_ingest` — it just gets its
+    records from the image files themselves instead of a metadata.txt
+    dump, so no separate extractor tool is needed.
+    """
+    jobs.update_job(job_id, status="running", progress=0.0, message="scanning folder")
+    try:
+        total = count_images(folder, recursive=recursive)
+    except Exception as exc:
+        jobs.update_job(job_id, status="error", error=f"scan failed: {exc}", finished=True)
+        return
+    if not total:
+        jobs.update_job(
+            job_id,
+            status="done",
+            progress=1.0,
+            message="no images found in that folder",
+            finished=True,
+        )
+        return
+
+    jobs.update_job(
+        job_id,
+        status="running",
+        message=f"reading {total:,} images",
+        detail={"total": total, "processed": 0, "path": str(folder)},
+    )
+
+    source_id: int | None = None
+    source_reused = False
+    inserted = skipped = no_metadata = 0
+    started = time.time()
+    ingest_started_at = datetime.utcnow()
+    tag_cache: dict[str, int] = {}
+
+    try:
+        filters_json = json.dumps(
+            {
+                "drop_artist_tags": drop_artist_tags,
+                "drop_quality_tags": drop_quality_tags,
+                "drop_character_tags": drop_character_tags,
+                "recursive": recursive,
+            }
+        )
+        with db.session_scope() as s:
+            source_id, created = _get_or_create_source(
+                s,
+                kind="metadata_file",
+                label=label,
+                dedup_key=local_dedup_key(folder),
+                note=str(folder),
+                filters_json=filters_json,
+            )
+            source_reused = not created
+
+        batch: list[tuple[MetadataRecord, list[str]]] = []
+        for idx, (path, rec) in enumerate(
+            iter_image_records(folder, recursive=recursive), start=1
+        ):
+            if rec is None:
+                # A photo, a screenshot, or a stripped export — expected, not
+                # an error. Counted separately from tagless prompts.
+                no_metadata += 1
+            else:
+                cleaned = clean_prompt(
+                    rec.prompt,
+                    drop_artist_tags=drop_artist_tags,
+                    drop_quality_tags=drop_quality_tags,
+                )
+                if cleaned.tags:
+                    batch.append((rec, cleaned.tags))
+                else:
+                    skipped += 1
+
+            if len(batch) >= batch_size:
+                inserted += _flush_metadata_batch(
+                    batch, source_id, drop_character_tags, tag_cache
+                )
+                batch.clear()
+                _emit_progress(job_id, idx, total, inserted, skipped, started)
+
+        if batch:
+            inserted += _flush_metadata_batch(
+                batch, source_id, drop_character_tags, tag_cache
+            )
+        _emit_progress(job_id, total, total, inserted, skipped, started)
+
+        total_in_source = _refresh_source_image_count(source_id) if source_id else 0
+        read_ok = total - no_metadata
+        updated = max(0, (read_ok - skipped) - inserted)
+
+        classify_suffix = (
+            _classify_after_ingest(
+                job_id,
+                created_after=ingest_started_at,
+                drop_character_tags=drop_character_tags,
+            )
+            if classify_after
+            else ""
+        )
+
+        jobs.update_job(
+            job_id,
+            status="done",
+            progress=1.0,
+            message=(
+                f"read {read_ok:,}/{total:,} images — {inserted:,} new + "
+                f"{updated:,} updated (no metadata: {no_metadata:,}, "
+                f"no usable tags: {skipped:,}, source total: {total_in_source:,})"
+                + (" — reused existing source" if source_reused else "")
+                + classify_suffix
+            ),
+            detail={
+                "total": total,
+                "processed": total,
+                "inserted": inserted,
+                "updated": updated,
+                "skipped": skipped,
+                "no_metadata": no_metadata,
+                "source_id": source_id,
+                "source_reused": source_reused,
+                "source_total_images": total_in_source,
+                "elapsed_sec": round(time.time() - started, 2),
+            },
+            finished=True,
+        )
+    except Exception as exc:
+        logger.exception("image folder ingest failed")
         jobs.update_job(job_id, status="error", error=str(exc), finished=True)
 
 

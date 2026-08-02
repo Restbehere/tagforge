@@ -3,7 +3,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Play, RefreshCw, Eye } from "lucide-react";
 
-import { api, type PreviewResponse, type TagBudget } from "@/lib/api";
+import {
+  api,
+  type FolderPreview,
+  type PreviewResponse,
+  type TagBudget,
+} from "@/lib/api";
 import { Panel } from "@/components/Panel";
 import { BucketBadge } from "@/components/BucketBadge";
 import { PresetPicker } from "@/components/PresetPicker";
@@ -32,12 +37,189 @@ export function Ingest() {
       <div>
         <h1 className="text-xl font-semibold">Ingest</h1>
         <p className="text-sm text-text-muted">
-          Pull prompts from your local metadata dump or scrape Danbooru / AIBooru.
+          Read prompts straight out of your images, import a metadata dump, or
+          scrape Danbooru / AIBooru.
         </p>
       </div>
+      <ImageFolderCard />
       <MetadataIngestCard />
       <BooruFetchCard />
     </div>
+  );
+}
+
+/** Read generation metadata directly from a folder of images — no separate
+ *  extractor tool and no metadata.txt in between. */
+function ImageFolderCard() {
+  const qc = useQueryClient();
+  const [path, setPath] = useState("");
+  const [label, setLabel] = useState("");
+  const [recursive, setRecursive] = useState(true);
+  const [dropArtist, setDropArtist] = useState(true);
+  const [dropQuality, setDropQuality] = useState(true);
+  const [dropCharacter, setDropCharacter] = useState(false);
+  const [classifyAfter, setClassifyAfter] = useState(true);
+  const [preview, setPreview] = useState<FolderPreview | null>(null);
+
+  const previewMut = useMutation({
+    mutationFn: () => api.previewImageFolder(path, recursive, 12),
+    onSuccess: (d) => {
+      setPreview(d);
+      toast.success(
+        `${d.with_metadata}/${d.sampled} sampled images carry metadata`,
+      );
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const startMut = useMutation({
+    mutationFn: () =>
+      api.ingestImageFolder({
+        path,
+        label: label || undefined,
+        recursive,
+        drop_artist_tags: dropArtist,
+        drop_quality_tags: dropQuality,
+        drop_character_tags: dropCharacter,
+        classify_after: classifyAfter,
+      }),
+    onSuccess: ({ job_id }) => {
+      jobStore.add(job_id);
+      toast.success(`Started job #${job_id}`);
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const busy = previewMut.isPending || startMut.isPending;
+
+  return (
+    <Panel
+      title="Read images directly"
+      description="Pull the prompt out of each image's embedded metadata — NovelAI stealth-PNG and Stable Diffusion parameters both work. No separate extractor needed."
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (path && !busy) previewMut.mutate();
+        }}
+      >
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <div>
+            <label className="pf-label" htmlFor="img-path">
+              Image folder
+            </label>
+            <input
+              id="img-path"
+              className="pf-input mt-1 font-mono text-xs"
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+              placeholder="C:\path\to\your\images"
+            />
+          </div>
+          <div>
+            <label className="pf-label" htmlFor="img-label">
+              Label (optional)
+            </label>
+            <input
+              id="img-label"
+              className="pf-input mt-1"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="e.g. my-may-batch"
+            />
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-4 text-sm">
+          <Checkbox
+            checked={recursive}
+            onChange={setRecursive}
+            label="include subfolders"
+          />
+          <Checkbox
+            checked={dropArtist}
+            onChange={setDropArtist}
+            label="drop artist tags"
+          />
+          <Checkbox
+            checked={dropQuality}
+            onChange={setDropQuality}
+            label="drop quality tags"
+          />
+          <Checkbox
+            checked={dropCharacter}
+            onChange={setDropCharacter}
+            label="drop character tags"
+          />
+          <Checkbox
+            checked={classifyAfter}
+            onChange={setClassifyAfter}
+            label="classify new tags after"
+          />
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <button
+            type="submit"
+            className="pf-btn"
+            disabled={!path || busy}
+            title="Read the first few images and show what would be imported"
+          >
+            <Eye size={14} /> Preview
+          </button>
+          <button
+            type="button"
+            className="pf-btn-primary"
+            disabled={!path || busy}
+            onClick={() => startMut.mutate()}
+            title="Scan the whole folder and import every image that carries metadata"
+          >
+            <Play size={14} /> Import folder
+          </button>
+          {preview && (
+            <span className="text-xs text-text-muted">
+              {preview.total_images.toLocaleString()} images found
+            </span>
+          )}
+        </div>
+      </form>
+
+      {preview && (
+        <div className="mt-4 overflow-x-auto rounded border border-line">
+          <table className="w-full text-xs">
+            <thead className="bg-bg-subtle/60 text-text-muted">
+              <tr>
+                <th className="px-2 py-1.5 text-left">File</th>
+                <th className="px-2 py-1.5 text-left">Source</th>
+                <th className="px-2 py-1.5 text-left">Prompt</th>
+              </tr>
+            </thead>
+            <tbody>
+              {preview.samples.map((s, i) => (
+                <tr key={`${s.filename}-${i}`} className="border-t border-line/60">
+                  <td className="max-w-[190px] truncate px-2 py-1.5 font-mono">
+                    {s.filename}
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-1.5">
+                    {s.has_metadata ? (
+                      <span className="text-text-muted">
+                        {s.nai_model ?? s.software ?? "generic"}
+                      </span>
+                    ) : (
+                      <span className="text-text-subtle">no metadata</span>
+                    )}
+                  </td>
+                  <td className="px-2 py-1.5 font-mono text-text-muted">
+                    <span className="line-clamp-2">{s.prompt || "—"}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Panel>
   );
 }
 

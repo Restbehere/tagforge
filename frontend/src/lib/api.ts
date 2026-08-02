@@ -241,6 +241,21 @@ export interface FeatureLogRow {
   at: string;
 }
 
+/** Sample of what a folder of images would yield, before committing to a run. */
+export interface FolderPreview {
+  path: string;
+  total_images: number;
+  sampled: number;
+  with_metadata: number;
+  samples: {
+    filename: string;
+    has_metadata: boolean;
+    software: string | null;
+    nai_model: string | null;
+    prompt: string;
+  }[];
+}
+
 export interface RolledScene {
   buckets: Record<string, string>;
   image?: {
@@ -458,6 +473,26 @@ export const api = {
     request<{ path: string; exists: boolean; size_bytes: number }>(
       "/ingest/metadata/defaults",
     ),
+
+  previewImageFolder: (path: string, recursive = true, sample_size = 12) =>
+    request<FolderPreview>("/ingest/images/preview", {
+      method: "POST",
+      body: JSON.stringify({ path, recursive, sample_size }),
+    }),
+
+  ingestImageFolder: (body: {
+    path: string;
+    label?: string;
+    recursive?: boolean;
+    drop_artist_tags?: boolean;
+    drop_quality_tags?: boolean;
+    drop_character_tags?: boolean;
+    classify_after?: boolean;
+  }) =>
+    request<{ job_id: number }>("/ingest/images/start", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   runExport: (body: {
     name: string;
