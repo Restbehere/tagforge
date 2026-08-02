@@ -56,7 +56,15 @@ export function LlmProviderPanel() {
               key={f}
               feature={f}
               data={cfg.data}
-              onSaved={() => qc.invalidateQueries({ queryKey: ["llm", "config"] })}
+              // Prefix key refreshes ["llm","config"] AND ["llm","status"],
+              // so the splitter panel reflects a provider change straight
+              // away instead of on its next 15s poll. refetchType "all"
+              // also refreshes the splitter's query while it is unmounted
+              // (we are on Settings), so navigating to Builder shows the new
+              // endpoint immediately rather than flashing the old one.
+              onSaved={() =>
+                qc.invalidateQueries({ queryKey: ["llm"], refetchType: "all" })
+              }
             />
           ))}
         </div>
