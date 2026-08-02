@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Panel } from "@/components/Panel";
 import { LlmProviderPanel } from "@/components/LlmProviderPanel";
 import { ConfirmButton } from "@/components/forms";
-import { api } from "@/lib/api";
+import { api, llmApi } from "@/lib/api";
 import { ACCENTS, useTheme, type ThemeMode } from "@/lib/theme";
 import { cn } from "@/lib/cn";
 import pkg from "../../package.json";
@@ -23,6 +23,29 @@ const MODES: { id: ThemeMode; label: string; icon: typeof Sun; hint: string }[] 
 
 export function Settings() {
   const { mode, setMode, accent, setAccent } = useTheme();
+
+  const llmCfg = useQuery({ queryKey: ["llm", "config"], queryFn: llmApi.getConfig });
+  const cfg = llmCfg.data?.config;
+  const offMachine = cfg
+    ? (["stage3", "splitter"] as const).filter(
+        (f) => cfg[f].kind !== "local" && cfg[f].kind !== "echo",
+      )
+    : [];
+  const llmTraffic = !cfg
+    ? "…"
+    : offMachine.length === 0
+      ? "Nothing leaves this machine — every feature is local"
+      : offMachine
+          .map(
+            (f) =>
+              `${f === "stage3" ? "classification" : "splitter"} → ` +
+              `${cfg[f].kind} (${cfg[f].model || "default"})`,
+          )
+          .join(" · ");
+  // The dev server proxies /api, so the origin is the backend in production
+  // and the proxy target in dev — either way it is the address in use,
+  // which a hardcoded literal was not.
+  const backendHost = window.location.host || "127.0.0.1:9301";
 
   return (
     <div className="max-w-2xl space-y-6">
@@ -92,9 +115,12 @@ export function Settings() {
       <Panel title="About">
         <dl className="space-y-2 text-sm">
           <InfoRow label="App" value={`Tag Forge v${pkg.version}`} />
-          <InfoRow label="Backend" value="127.0.0.1:9301" mono />
+          <InfoRow label="Backend" value={backendHost} mono />
           <InfoRow label="Frontend dev server" value=":9300" mono />
-          <InfoRow label="Data" value="Local SQLite — nothing leaves this machine" />
+          <InfoRow label="Data" value="Local SQLite — the database stays on this machine" />
+          {/* This used to read "nothing leaves this machine" unconditionally,
+              which the shipped default contradicts: Stage 3 goes to OpenAI. */}
+          <InfoRow label="LLM traffic" value={llmTraffic} />
         </dl>
         {/* CC BY 3.0 requires the credit to travel with the work. */}
         <p className="mt-4 border-t border-line pt-3 text-xs text-text-muted">

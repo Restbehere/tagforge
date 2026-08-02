@@ -58,6 +58,22 @@ DEFAULT_MODEL_BY_KIND = {
 
 FEATURE_LABELS = {"stage3": "tag classification", "splitter": "the prompt splitter"}
 
+# Which environment variable legitimately belongs to which provider.
+# 'openai_compatible' deliberately has NO entry: an OpenAI key is not a
+# credential for an arbitrary gateway, and falling back to it would put the
+# user's OPENAI_API_KEY in an Authorization header addressed to a
+# third-party host they chose specifically to avoid OpenAI.
+ENV_KEY_BY_KIND = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
+
+# The splitter speaks the OpenAI chat-completions wire format directly, so
+# Anthropic's Messages API cannot drive it, and 'echo' has no meaning there.
+# Offering them in its dropdown only produced a silent misroute to the local
+# server, so each feature advertises what it can actually dispatch.
+SUPPORTED_KINDS = {
+    "stage3": KINDS,
+    "splitter": ("openai", "openai_compatible", "local"),
+}
+
 
 class LlmConfigError(RuntimeError):
     """The configured endpoint cannot be used as-is (e.g. no model name).
@@ -149,6 +165,20 @@ def save_config(patch: dict[str, Any]) -> dict[str, Any]:
                     current[feature][k] = v
         if current[feature].get("kind") not in KINDS:
             current[feature]["kind"] = DEFAULTS[feature]["kind"]
+        # Only a gateway carries its own endpoint. Keeping one after a switch
+        # away from 'openai_compatible' left an invisible value steering the
+        # request — the field is not even rendered for other kinds — so an
+        # OpenAI-labelled target went on talking to the old gateway, with the
+        # OpenAI key attached.
+        if current[feature]["kind"] != "openai_compatible":
+            current[feature]["base_url"] = ""
+        base = (current[feature].get("base_url") or "").strip()
+        if base and not base.lower().startswith(("http://", "https://")):
+            raise LlmConfigError(
+                f"Base URL for {FEATURE_LABELS.get(feature, feature)} must start "
+                f"with http:// or https:// — got {base!r}."
+            )
+        current[feature]["base_url"] = base
         try:
             current[feature]["max_concurrency"] = max(
                 1, min(12, int(current[feature]["max_concurrency"]))
@@ -168,22 +198,54 @@ def save_config(patch: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _cred_name(feature: str, kind: str = "") -> str:
+    """Credential rows are scoped to (feature, provider).
+
+    A key is issued by one provider and is meaningless — and dangerous — at
+    another's endpoint. Storing it per-feature meant switching Provider
+    silently re-sent the previous provider's key to the new host, which is
+    the same crossing the environment-variable fallback used to allow.
+    """
+    kind = kind or load_config().get(feature, {}).get("kind", "")
+    return f"{feature}:{kind}"
+
+
+def _find_cred(s, feature: str, kind: str = ""):
+    name = _cred_name(feature, kind)
+    row = s.exec(
+        select(ApiCredential).where(
+            ApiCredential.scope == CRED_SCOPE, ApiCredential.name == name
+        )
+    ).first()
+    if row is not None:
+        return row
+    # One-time upgrade of a pre-0.9 row, which was scoped to the feature
+    # alone. It was entered for whatever provider is configured now, so
+    # that is the only provider it can safely be attributed to.
+    legacy = s.exec(
+        select(ApiCredential).where(
+            ApiCredential.scope == CRED_SCOPE, ApiCredential.name == feature
+        )
+    ).first()
+    if legacy is not None:
+        legacy.name = name
+        s.add(legacy)
+    return legacy
+
+
 def set_api_key(feature: str, key: str) -> str:
-    """Store (or clear, when key is blank) a feature's API key. Returns the hint."""
+    """Store (or clear, when key is blank) the key for this feature's current
+    provider. Returns the hint."""
     key = (key or "").strip()
     hint = f"…{key[-4:]}" if len(key) >= 4 else ("set" if key else "")
     with db.session_scope() as s:
-        row = s.exec(
-            select(ApiCredential).where(
-                ApiCredential.scope == CRED_SCOPE, ApiCredential.name == feature
-            )
-        ).first()
+        row = _find_cred(s, feature)
         if not key:
             if row is not None:
                 s.delete(row)
             return ""
         if row is None:
-            row = ApiCredential(scope=CRED_SCOPE, name=feature)
+            row = ApiCredential(scope=CRED_SCOPE, name=_cred_name(feature))
         row.value, row.hint = key, hint
         s.add(row)
     return hint
@@ -196,18 +258,13 @@ def get_api_key(feature: str) -> str:
     needs no migration.
     """
     with db.session_scope() as s:
-        row = s.exec(
-            select(ApiCredential).where(
-                ApiCredential.scope == CRED_SCOPE, ApiCredential.name == feature
-            )
-        ).first()
+        row = _find_cred(s, feature)
         if row is not None and row.value:
             return row.value
 
     kind = load_config().get(feature, {}).get("kind", "")
-    if kind == "anthropic":
-        return os.environ.get("ANTHROPIC_API_KEY", "")
-    return os.environ.get("OPENAI_API_KEY", "")
+    env = ENV_KEY_BY_KIND.get(kind)
+    return os.environ.get(env, "") if env else ""
 
 
 def key_hints() -> dict[str, str]:
@@ -215,19 +272,18 @@ def key_hints() -> dict[str, str]:
     hints = {f: "" for f in _FEATURES}
     try:
         with db.session_scope() as s:
-            for row in s.exec(
-                select(ApiCredential).where(ApiCredential.scope == CRED_SCOPE)
-            ).all():
-                if row.name in hints:
-                    hints[row.name] = row.hint
+            for feature in _FEATURES:
+                row = _find_cred(s, feature)
+                if row is not None:
+                    hints[feature] = row.hint
     except Exception:
         pass
     for feature in _FEATURES:
         if hints[feature]:
             continue
         kind = load_config().get(feature, {}).get("kind", "")
-        env = "ANTHROPIC_API_KEY" if kind == "anthropic" else "OPENAI_API_KEY"
-        if os.environ.get(env):
+        env = ENV_KEY_BY_KIND.get(kind)
+        if env and os.environ.get(env):
             hints[feature] = f"from {env}"
     return hints
 
@@ -263,7 +319,15 @@ class Target:
 
     @property
     def uses_openai_sdk(self) -> bool:
-        return self.kind in ("openai", "openai_compatible")
+        """OpenAI, any OpenAI-compatible gateway, and llama-swap itself all
+        speak the same wire format, so one SDK client drives all three.
+
+        llama-swap belongs here: Stage 3 previously dispatched on the kind
+        name and had no 'local' handler, so selecting it — the most private
+        option, and the whole point of configurable endpoints — failed with
+        "unknown LLM provider: local".
+        """
+        return self.kind in ("openai", "openai_compatible", "local")
 
     @property
     def supports_batch_api(self) -> bool:
@@ -272,6 +336,24 @@ class Target:
 
     def api_key(self) -> str:
         return get_api_key(self.feature)
+
+    def sdk_base_url(self, local_default: str = "") -> str:
+        """Base URL for the OpenAI SDK, which appends ``/chat/completions``.
+
+        Gateways publish their URL with the version already on it
+        ("https://openrouter.ai/api/v1"); llama-swap is configured as a bare
+        host, so it needs ``/v1`` added.
+        """
+        base = self.require_base_url(local_default).rstrip("/")
+        return base if base.endswith("/v1") else f"{base}/v1"
+
+    def sdk_api_key(self) -> str:
+        """llama-swap ignores auth, but the SDK refuses to build without a
+        non-empty key — so give the local server a placeholder rather than
+        letting a real key be resolved for it."""
+        if self.is_local:
+            return "not-needed"
+        return self.api_key()
 
     def require_model(self, local_default: str = "") -> str:
         """The model name to send, or a clear error when there is none.
@@ -290,6 +372,36 @@ class Target:
             f"'{self.kind}' has no default to fall back on — set a model name "
             "under Settings → LLM providers."
         )
+
+    def require_base_url(self, local_default: str = "") -> str:
+        """The endpoint to call, or a clear error when there is none.
+
+        Only 'local' and 'openai' have an endpoint of their own. A blank
+        URL used to fall through to whatever the caller's default was —
+        the local server for the splitter, api.openai.com for Stage 3 —
+        so picking a gateway and forgetting its URL silently sent the
+        request somewhere the user had not chosen. For Stage 3 that meant
+        OpenAI, inverting the reason for selecting a gateway at all.
+        """
+        if self.base_url:
+            return self.base_url
+        if self.is_local and local_default:
+            return local_default
+        raise LlmConfigError(
+            f"No base URL set for {FEATURE_LABELS.get(self.feature, self.feature)}. "
+            f"'{self.kind}' has no endpoint of its own — paste the gateway's URL "
+            "(e.g. https://openrouter.ai/api/v1) under Settings → LLM providers."
+        )
+
+    def require_supported(self) -> None:
+        """Reject a provider this feature cannot actually dispatch."""
+        allowed = SUPPORTED_KINDS.get(self.feature, KINDS)
+        if self.kind not in allowed:
+            raise LlmConfigError(
+                f"{FEATURE_LABELS.get(self.feature, self.feature).capitalize()} "
+                f"cannot use '{self.kind}' — it speaks the OpenAI "
+                f"chat-completions API. Choose one of: {', '.join(allowed)}."
+            )
 
     def describe(self) -> str:
         return f"{self.kind}:{self.model or 'default'}"

@@ -892,6 +892,9 @@ export interface LlmConfigResponse {
   /** Model to prefill when switching provider; blank where the endpoint
    *  picks its own (local) or none is universal (gateways). */
   default_models: Record<LlmKind, string>;
+  /** Kinds each feature can actually dispatch — the splitter speaks the
+   *  OpenAI chat-completions format, so it cannot drive Anthropic. */
+  supported_kinds: { stage3: LlmKind[]; splitter: LlmKind[] };
 }
 
 export const llmApi = {

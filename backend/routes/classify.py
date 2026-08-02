@@ -66,8 +66,11 @@ class Stage2Body(BaseModel):
 
 
 class Stage3Body(BaseModel):
-    provider: str = "openai"  # 'openai' | 'anthropic' | 'echo'
-    model: str = "gpt-4o-mini"
+    # Blank/absent = use whatever Settings → LLM providers is pointed at.
+    # These used to default to OpenAI + gpt-4o-mini, which silently overrode
+    # that setting for every manual run from the Tags page.
+    provider: Optional[str] = None  # 'openai' | 'anthropic' | 'echo' | ''
+    model: Optional[str] = None
     batch_size: int = 50
     max_tags: Optional[int] = None
     rebuild_scenes: bool = True
@@ -509,7 +512,7 @@ def _run_stage3(job_id: int, body: dict[str, Any]) -> None:
                 message="submitting OpenAI batch…",
             )
             detail = submit_batch_job(
-                model=body["model"],
+                model=body.get("model") or "",
                 batch_size=body["batch_size"],
                 max_tags=body.get("max_tags"),
                 job_id=job_id,
@@ -530,10 +533,15 @@ def _run_stage3(job_id: int, body: dict[str, Any]) -> None:
             )
             return
 
-        jobs.update_job(job_id, status="running", progress=0.1, message=f"calling {body['provider']}…")
+        jobs.update_job(
+            job_id,
+            status="running",
+            progress=0.1,
+            message=f"calling {body.get('provider') or 'the configured endpoint'}…",
+        )
         result = reclassify_residuals(
-            provider=body["provider"],
-            model=body["model"],
+            provider=body.get("provider") or "",
+            model=body.get("model") or "",
             batch_size=body["batch_size"],
             max_tags=body.get("max_tags"),
             concurrency=body.get("concurrency", 6),

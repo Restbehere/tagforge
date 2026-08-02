@@ -10,6 +10,84 @@ and `backend/pyproject.toml` — and read from there everywhere else (the
 sidebar footer, Settings → About, and `GET /api/health`). Bump both, and
 add an entry here, in the same commit as the change.
 
+## 0.9.0 — 2026-08-02
+
+An audit of every field in `Settings → LLM providers`, prompted by the
+0.8.3 bug. That one was an instance of a pattern — a blank or stale field
+falling back to a value belonging to a *different* provider than the one
+selected — and the pattern had five more instances, three of which moved
+data or credentials somewhere the user had not chosen.
+
+### Security
+- **An OpenAI key could be sent to a third-party gateway.** With a
+  provider selected that has no environment variable of its own
+  (`openai_compatible`), the key lookup fell through to `OPENAI_API_KEY`
+  and put it in an `Authorization` header addressed to that gateway. The
+  key hint compounded it by reporting "currently from OPENAI_API_KEY" for
+  gateways, making it look deliberate. Environment fallbacks are now bound
+  to the provider the variable belongs to.
+- **A stored key outlived the provider it was entered for.** Keys were
+  saved per feature, so changing provider re-sent the previous provider's
+  key to the new host. They are now stored per (feature, provider); an
+  existing key is migrated to the provider currently configured, and each
+  provider keeps its own.
+- **Switching provider kept the previous provider's endpoint.** The Base
+  URL field is only rendered for `openai_compatible`, but its value
+  survived a switch away and was still saved — so a target displaying
+  "OpenAI", with no URL shown anywhere, went on posting to the old
+  gateway with the OpenAI key attached. The endpoint is now cleared on
+  both sides whenever the provider cannot use one.
+- **A blank Base URL silently rerouted.** For Stage 3 it fell through to
+  `api.openai.com` — sending the corpus to OpenAI, inverting the reason
+  for choosing a gateway — and for the splitter to the local server. A
+  provider with no endpoint of its own now requires one.
+- **The Batch API ignored the configured provider.** It is an OpenAI
+  product and always reached OpenAI on the environment key, whatever
+  Stage 3 was set to. It now refuses to submit unless Stage 3 is
+  actually on OpenAI.
+- A per-run provider on the Tags page could disagree with the configured
+  target, whose key and endpoint were still used — so choosing Anthropic
+  there sent the *OpenAI* key to Anthropic. Per-run providers are gone
+  apart from `echo`, which sends nothing.
+
+### Added
+- **Stage 3 can run on the local model.** "Local (llama-swap)" was in the
+  dropdown but had no dispatch handler, so selecting the most private
+  option failed with `unknown LLM provider: local`. llama-swap speaks the
+  OpenAI wire format, so it now drives Stage 3 through the same client as
+  every other endpoint — classification with nothing leaving the machine.
+
+### Fixed
+- The Tags page ran Stage 3 against hardcoded `openai` + `gpt-4o-mini`,
+  overriding Settings on every manual run — the one thing that setting
+  exists to control. It now follows the configured endpoint and names it.
+- A key entered for Anthropic was stored, reported as stored, and then
+  ignored: the client read only `ANTHROPIC_API_KEY` and failed saying no
+  key was set.
+- The splitter offered Anthropic and echo, neither of which it can drive
+  (it speaks chat-completions directly); picking either quietly ran
+  against the local server. Each feature now advertises only what it can
+  dispatch.
+- `echo` demanded a model name it never sends, so dry runs failed once
+  the model field was empty.
+- Status, Test and Unload each read the local server's address by their
+  own rule. Unload ignored a configured address entirely, and a base URL
+  ending in `/v1` made status request `/v1/v1/models` and report a
+  running server as down. All three now resolve it identically.
+- A Base URL with no scheme is rejected on save instead of surfacing later
+  as a connection failure.
+- "Parallel requests" could be driven to `NaN` by clearing the box,
+  producing a raw 422. It is clamped as you type, and both Advanced
+  controls are hidden on the splitter panel where neither has any effect.
+- Saving one provider panel discarded unsaved edits in the other.
+- An empty-valued `TAGFORGE_*` variable resolved paths to `.` rather than
+  the default — which would have pointed Decompose's "Update" button at
+  Tag Forge's own checkout. Empty now means unset.
+- The About panel claimed "nothing leaves this machine" unconditionally,
+  which the shipped default contradicts. It now reports where each
+  feature's traffic actually goes, and the backend address reflects the
+  origin in use rather than a hardcoded literal.
+
 ## 0.8.3 — 2026-08-02
 
 ### Fixed

@@ -93,8 +93,15 @@ _load_dotenv(PROJECT_ROOT / ".env")
 def _env(name: str, default: str = "") -> str:
     """Read ``TAGFORGE_<name>``, falling back to the pre-rename
     ``PROMPTFINDER_<name>`` so existing .env files keep working."""
-    legacy = os.environ.get(f"PROMPTFINDER_{name}", default)
-    return os.environ.get(f"TAGFORGE_{name}", legacy)
+    # An empty value counts as unset. A bare ``TAGFORGE_SEETHROUGH_DIR=`` in
+    # .env otherwise resolved that path to Path("."), pointing directory
+    # settings at the repo root — where Decompose's "Update" would have run
+    # git pull against Tag Forge's own checkout.
+    return (
+        os.environ.get(f"TAGFORGE_{name}")
+        or os.environ.get(f"PROMPTFINDER_{name}")
+        or default
+    )
 
 
 DATA_DIR = BACKEND_DIR / "data"

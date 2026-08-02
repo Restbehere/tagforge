@@ -1,6 +1,6 @@
 [project]
 name = "tagforge-backend"
-version = "0.8.3"
+version = "0.9.0"
 description = "Tag Forge backend: ingest, classify and serve NovelAI/Danbooru tag data."
 requires-python = ">=3.10"
 dependencies = [

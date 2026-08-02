@@ -23,7 +23,7 @@ import {
   Loader2,
 } from "lucide-react";
 
-import { api, type TagRow, type TagHistoryRow } from "@/lib/api";
+import { api, llmApi, type TagRow, type TagHistoryRow } from "@/lib/api";
 import { ASSIGN_BUCKETS, bucketButtonClass } from "@/lib/buckets";
 import { Panel } from "@/components/Panel";
 import { BucketBadge } from "@/components/BucketBadge";
@@ -287,11 +287,23 @@ function SmartClassifyCard() {
     "mixedbread-ai/mxbai-embed-large-v1",
   );
   const [embedDevice, setEmbedDevice] = useState("auto");
-  const [llmProvider, setLlmProvider] = useState("openai");
-  const [llmModel, setLlmModel] = useState("gpt-4o-mini");
+  // Blank = follow Settings → LLM providers. These used to default to
+  // OpenAI + gpt-4o-mini, so every manual run silently overrode the
+  // configured endpoint — the one thing that setting exists to control.
+  const [llmProvider, setLlmProvider] = useState("");
+  const [llmModel, setLlmModel] = useState("");
   const [llmMaxTags, setLlmMaxTags] = useState<number | "">(500);
   const [llmConcurrency, setLlmConcurrency] = useState(6);
   const [useBatchApi, setUseBatchApi] = useState(false);
+
+  const llmCfgQ = useQuery({ queryKey: ["llm", "config"], queryFn: llmApi.getConfig });
+  const stage3Cfg = llmCfgQ.data?.config.stage3;
+  const configuredTarget = stage3Cfg
+    ? `${stage3Cfg.kind}:${stage3Cfg.model || "default"}`
+    : "Settings";
+  // The Batch API is an OpenAI product, and the backend refuses to submit
+  // while Stage 3 points anywhere else — so do not offer it there.
+  const batchAvailable = (llmProvider || stage3Cfg?.kind) === "openai";
 
   const stage2Mut = useMutation({
     mutationFn: () =>
@@ -313,17 +325,19 @@ function SmartClassifyCard() {
   const stage3Mut = useMutation({
     mutationFn: () =>
       api.classifyStage3({
-        provider: llmProvider,
-        model: llmModel,
+        // Omitted entirely when blank, so the backend resolves the
+        // configured endpoint rather than being handed an override.
+        provider: llmProvider || undefined,
+        model: llmModel || undefined,
         max_tags: typeof llmMaxTags === "number" ? llmMaxTags : undefined,
         rebuild_scenes: true,
         concurrency: llmConcurrency,
         // Batch API is OpenAI-only; never send it for other providers.
-        use_batch_api: llmProvider === "openai" && useBatchApi,
+        use_batch_api: batchAvailable && useBatchApi,
       }),
     onSuccess: ({ job_id }) => {
       jobStore.add(job_id);
-      toast.success(`started LLM classifier (${llmProvider})`);
+      toast.success(`started LLM classifier (${llmProvider || configuredTarget})`);
       qc.invalidateQueries({ queryKey: ["classify-queue"] });
     },
     onError: (err: Error) => toast.error(err.message),
@@ -577,10 +591,10 @@ function SmartClassifyCard() {
                 className="pf-input"
                 value={llmProvider}
                 onChange={(e) => setLlmProvider(e.target.value)}
+                title="Change the endpoint under Settings → LLM providers. The key and URL live there, so a per-run provider could only mismatch them."
               >
-                <option value="openai">OpenAI</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="echo">echo (dry-run)</option>
+                <option value="">From Settings — {configuredTarget}</option>
+                <option value="echo">echo (dry-run, no network)</option>
               </select>
             </Field>
             <Field label="Model">
@@ -588,6 +602,7 @@ function SmartClassifyCard() {
                 className="pf-input font-mono text-xs"
                 value={llmModel}
                 onChange={(e) => setLlmModel(e.target.value)}
+                placeholder={stage3Cfg?.model || "(from Settings)"}
               />
             </Field>
             <Field label="Max tags">
@@ -611,7 +626,7 @@ function SmartClassifyCard() {
               />
             </Field>
           </div>
-          {llmProvider === "openai" && (
+          {batchAvailable && (
             <div className="mt-2">
               <Checkbox
                 checked={useBatchApi}

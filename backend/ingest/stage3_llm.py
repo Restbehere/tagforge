@@ -180,7 +180,10 @@ def _get_openai_client(
             "(installs `openai` + `anthropic`)"
         ) from exc
 
-    api_key = api_key or os.environ.get("OPENAI_API_KEY") or ""
+    # No environment fallback here. Callers resolve the key through
+    # llm_config, which only reads OPENAI_API_KEY when the selected provider
+    # IS OpenAI — falling back here as well would put that key back into a
+    # request addressed to a third-party gateway.
     if not api_key:
         raise RuntimeError(
             "No API key for Stage 3. Set one under Settings → LLM providers, "
@@ -240,7 +243,7 @@ def _call_openai(
     return _loads_lenient(resp.choices[0].message.content or "{}")
 
 
-def _get_anthropic_client() -> Any:
+def _get_anthropic_client(api_key: str = "") -> Any:
     """Create one Anthropic client. Raises on missing package/key so config
     errors abort on the main thread instead of failing every worker batch."""
     try:
@@ -251,11 +254,14 @@ def _get_anthropic_client() -> Any:
             "    .venv\\Scripts\\python -m pip install -e .\\backend[llm]"
         ) from exc
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    # A key entered in Settings used to be stored and reported as stored,
+    # then ignored here in favour of the environment — so the UI showed a
+    # key while the run failed saying none was set.
+    api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set. Add it to Tag Forge/.env "
-            "or set it in your shell before launching the backend."
+            "No API key for Anthropic. Set one under Settings → LLM "
+            "providers, or put ANTHROPIC_API_KEY in Tag Forge/.env."
         )
     return Anthropic(api_key=api_key)
 
@@ -413,15 +419,33 @@ def reclassify_residuals(
 
     # 'openai_compatible' shares OpenAI's request shape; only the endpoint
     # and the availability of provider-only features differ.
-    provider = provider or ("openai" if target.uses_openai_sdk else target.kind)
-    if provider == "openai_compatible":
-        provider = "openai"
+    target.require_supported()
+    resolved = "openai" if target.uses_openai_sdk else target.kind
+    requested = (provider or "").strip()
+    if requested == "openai_compatible":
+        requested = "openai"
+    # The endpoint and key always come from the configured target, so a
+    # per-run provider that disagrees with it would post the target's
+    # credential to a different vendor's API. 'echo' is exempt: it is a
+    # local dry run that sends nothing.
+    if requested and requested != "echo" and requested != resolved:
+        raise llm_config.LlmConfigError(
+            f"Stage 3 is configured for '{target.kind}', but this run asked for "
+            f"'{requested}'. The stored key and endpoint belong to "
+            f"'{target.kind}', so the request would carry the wrong credential. "
+            "Change the provider under Settings → LLM providers instead."
+        )
+    provider = requested or resolved
     if provider not in _DISPATCH:
         raise ValueError(f"unknown LLM provider: {provider}")
+
     # (DEFAULT_MODEL is llama-swap's, hence only offered to a local target.)
     from ..llm import DEFAULT_MODEL
 
-    model = model or target.require_model(DEFAULT_MODEL)
+    # Resolved after the dispatch decision: echo never sends a request, so
+    # demanding a model name would fail a dry run for no reason.
+    if provider != "echo":
+        model = model or target.require_model(DEFAULT_MODEL)
     concurrency = int(concurrency) or target.max_concurrency
     # Gateways on free/low tiers reject the default 6-way fan-out.
     concurrency = max(1, min(12, concurrency, target.max_concurrency))
@@ -458,11 +482,11 @@ def reclassify_residuals(
         client = None
         if provider == "openai":
             client = _get_openai_client(
-                base_url=target.base_url if target.uses_openai_sdk else "",
-                api_key=target.api_key(),
+                base_url=target.sdk_base_url(settings.LLAMA_SWAP_URL),
+                api_key=target.sdk_api_key(),
             )
         elif provider == "anthropic":
-            client = _get_anthropic_client()
+            client = _get_anthropic_client(target.api_key())
 
         def _worker(names: list[str]) -> dict[str, str]:
             # Workers ONLY call the API and return the parsed dict (or raise);
@@ -572,9 +596,33 @@ def _serialize_llm_batch(row: LlmBatch) -> dict[str, Any]:
     }
 
 
+def _openai_batch_client() -> Any:
+    """A client for the Batch API, which only OpenAI offers.
+
+    These calls always reach OpenAI no matter where live classification is
+    pointed, so the key is resolved explicitly rather than inherited from a
+    target that may belong to a different provider.
+    """
+    from .. import llm_config
+
+    target = llm_config.get_target("stage3")
+    key = (
+        target.api_key()
+        if target.kind == "openai"
+        else os.environ.get("OPENAI_API_KEY", "")
+    )
+    if not key:
+        raise RuntimeError(
+            "The OpenAI Batch API needs an OpenAI key, but Stage 3 is pointed "
+            f"at '{target.kind}'. Put OPENAI_API_KEY in Tag Forge/.env, or "
+            "switch Stage 3 to OpenAI under Settings → LLM providers."
+        )
+    return _get_openai_client(api_key=key)
+
+
 def submit_batch_job(
     *,
-    model: str = "gpt-4o-mini",
+    model: str = "",  # blank = the configured Stage 3 model
     batch_size: int = 50,
     max_tags: int | None = None,
     job_id: int | None = None,
@@ -584,6 +632,21 @@ def submit_batch_job(
     Same residual selection + cache filtering as :func:`reclassify_residuals`;
     results are pulled in later via :func:`apply_batch`.
     """
+    from .. import llm_config
+
+    # Submitting here sends the corpus to OpenAI. Doing that silently while
+    # Stage 3 is configured for somewhere else would invert the whole reason
+    # for choosing another provider, so refuse rather than reroute.
+    target = llm_config.get_target("stage3")
+    if target.kind != "openai":
+        raise llm_config.LlmConfigError(
+            "The Batch API is OpenAI-only, but Stage 3 is configured for "
+            f"'{target.kind}'. Submitting would send your tags to OpenAI. "
+            "Use the live path instead, or switch Stage 3 to OpenAI under "
+            "Settings → LLM providers."
+        )
+    model = model or target.require_model()
+
     cache = _load_cache()
     residual_pairs = _select_residual_pairs()
     if max_tags is not None:
@@ -623,7 +686,7 @@ def submit_batch_job(
         )
     n_batches = len(lines)
 
-    client = _get_openai_client()
+    client = _openai_batch_client()
     buf = io.BytesIO(("\n".join(lines) + "\n").encode("utf-8"))
     upload = client.files.create(file=("stage3.jsonl", buf), purpose="batch")
     batch = client.batches.create(
@@ -674,7 +737,7 @@ def refresh_llm_batches() -> list[dict[str, Any]]:
             if row.status not in _TERMINAL_BATCH_STATES:
                 try:
                     if client is None:
-                        client = _get_openai_client()
+                        client = _openai_batch_client()
                     batch = client.batches.retrieve(row.openai_batch_id)
                 except Exception:
                     # Offline / missing key / API hiccup — keep stored status.
@@ -708,7 +771,7 @@ def apply_batch(batch_db_id: int, job_id: int | None = None) -> dict[str, Any]:
         openai_batch_id = row.openai_batch_id
         row_model = row.model
 
-    client = _get_openai_client()
+    client = _openai_batch_client()
     batch = client.batches.retrieve(openai_batch_id)
     status = getattr(batch, "status", None) or "unknown"
     output_file_id = getattr(batch, "output_file_id", None)

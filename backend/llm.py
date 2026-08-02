@@ -44,7 +44,11 @@ def _chat_target(model: str | None) -> tuple[str, dict[str, str], str, bool]:
     from . import llm_config
 
     target = llm_config.get_target("splitter")
-    base = (target.base_url or settings.LLAMA_SWAP_URL).rstrip("/")
+    target.require_supported()
+    # LLAMA_SWAP_URL is the local server's address, so it is only a valid
+    # default for a local target. It used to be the fallback for every kind,
+    # which quietly ran a gateway-bound request against llama-swap instead.
+    base = (_local_base() if target.is_local else target.require_base_url()).rstrip("/")
     headers: dict[str, str] = {}
     if not target.is_local:
         key = target.api_key()
@@ -61,6 +65,24 @@ def _chat_target(model: str | None) -> tuple[str, dict[str, str], str, bool]:
     # guaranteed there. A third-party gateway may ignore json_schema, so we
     # ask for the weaker json_object mode instead of getting prose back.
     return f"{base}{suffix}", headers, chosen, target.is_local
+
+
+def _local_base() -> str:
+    """The llama-swap control-plane address, honouring a configured override.
+
+    Status, unload and TTL all describe one server; reading the address
+    differently in each let the Builder report a target it was not actually
+    managing.
+    """
+    from . import llm_config
+
+    target = llm_config.get_target("splitter")
+    base = (target.base_url if target.is_local else "") or settings.LLAMA_SWAP_URL
+    base = base.rstrip("/")
+    # A base already carrying the version segment must not get a second one;
+    # _chat_target has always allowed that form, so the control plane has to
+    # read it the same way or it reports a live server as down.
+    return base[:-3].rstrip("/") if base.lower().endswith("/v1") else base
 
 
 def _response_format(supports_schema: bool, name: str, schema: dict) -> dict:
@@ -566,7 +588,7 @@ def server_status() -> dict[str, Any]:
             "target": target.describe(),
         }
 
-    base = target.base_url or settings.LLAMA_SWAP_URL
+    base = _local_base()
     try:
         with httpx.Client(timeout=3) as c:
             models = [
@@ -636,7 +658,7 @@ def unload_models() -> dict[str, Any]:
     """Free VRAM immediately (llama-swap reloads on the next request)."""
     try:
         with httpx.Client(timeout=10) as c:
-            r = c.post(f"{settings.LLAMA_SWAP_URL}/api/models/unload")
+            r = c.post(f"{_local_base()}/api/models/unload")
         if r.status_code >= 400:
             return {"ok": False, "error": f"llama-swap returned {r.status_code}: {r.text[:200]}"}
     except Exception as exc:

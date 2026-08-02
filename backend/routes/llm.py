@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import llm as svc
-from .. import llm_config
+from .. import llm_config, settings
 
 router = APIRouter()
 
@@ -126,6 +126,8 @@ def _config_payload() -> dict[str, Any]:
         # Lets the form prefill a model when the provider changes, so a
         # remote endpoint is never saved without one.
         "default_models": llm_config.DEFAULT_MODEL_BY_KIND,
+        # Per-feature, because the splitter cannot drive Anthropic or echo.
+        "supported_kinds": {f: list(k) for f, k in llm_config.SUPPORTED_KINDS.items()},
     }
 
 
@@ -152,7 +154,12 @@ def put_llm_config(body: LlmConfigIn) -> dict[str, Any]:
         if fields:
             patch[feature] = fields
     if patch:
-        llm_config.save_config(patch)
+        try:
+            llm_config.save_config(patch)
+        except llm_config.LlmConfigError as exc:
+            # A rejected value (e.g. a scheme-less base URL) is the user's to
+            # fix, so return the message rather than a 500.
+            raise HTTPException(400, str(exc))
     return _config_payload()
 
 
@@ -164,17 +171,27 @@ class LlmTestIn(BaseModel):
 def test_llm_config(body: LlmTestIn) -> dict[str, Any]:
     """Round-trip one tiny request so misconfiguration surfaces here rather
     than halfway through a long classification run."""
-    from .. import llm_config
-
     target = llm_config.get_target(body.feature)
     try:
+        target.require_supported()
         if target.kind == "echo":
             return {"ok": True, "detail": "echo provider — no network call"}
         if target.is_local:
-            st = svc.server_status()
-            if not st.get("up"):
-                return {"ok": False, "detail": "local llama-swap server is not reachable"}
-            return {"ok": True, "detail": f"llama-swap up — {len(st.get('models', []))} model(s)"}
+            # Probe llama-swap directly: server_status() always reports the
+            # SPLITTER's target, so using it here described the wrong feature
+            # whenever Stage 3 was the one set to local.
+            base = svc._local_base()
+            try:
+                with httpx.Client(timeout=3.0) as c:
+                    models = [
+                        m["id"] for m in c.get(f"{base}/v1/models").json().get("data", [])
+                    ]
+            except Exception:
+                return {
+                    "ok": False,
+                    "detail": f"local llama-swap server is not reachable at {base}",
+                }
+            return {"ok": True, "detail": f"llama-swap up — {len(models)} model(s)"}
         if target.kind == "anthropic":
             return {"ok": False, "detail": "no test implemented for Anthropic yet"}
 
@@ -197,7 +214,9 @@ def test_llm_config(body: LlmTestIn) -> dict[str, Any]:
         from ..ingest.stage3_llm import _get_openai_client
 
         client = _get_openai_client(
-            base_url=target.base_url, api_key=target.api_key(), timeout=30.0
+            base_url=target.sdk_base_url(settings.LLAMA_SWAP_URL),
+            api_key=target.sdk_api_key(),
+            timeout=30.0,
         )
         resp = client.chat.completions.create(
             model=target.require_model(), messages=probe, max_tokens=8
