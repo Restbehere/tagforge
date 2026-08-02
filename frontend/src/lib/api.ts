@@ -842,6 +842,11 @@ export interface LlmStatus {
   running: { model: string | null; state: string | null }[];
   default_model: string | null;
   ttl_minutes: number | null;
+  /** True when the splitter points somewhere other than the local
+   *  llama-swap server — the start/unload/TTL controls do not apply. */
+  remote?: boolean;
+  /** Human-readable resolved endpoint, e.g. "openai:gpt-4.1-mini". */
+  target?: string;
 }
 
 /** Speech-bubble handling: let the model decide, or force it on/off. */

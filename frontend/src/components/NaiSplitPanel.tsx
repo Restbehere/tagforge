@@ -97,8 +97,12 @@ export function NaiSplitPanel({
   }, [mode, model, speech, stripIdentity, inventBg, enrichBg, bubble, textPos]);
 
   const models = status.data?.models ?? [];
-  const effectiveModel =
-    model && models.includes(model)
+  const remote = status.data?.remote === true;
+  // A remembered local model must not override a remote endpoint's
+  // configured model — the backend treats an explicit model as the winner.
+  const effectiveModel = remote
+    ? (status.data?.default_model ?? "")
+    : model && models.includes(model)
       ? model
       : (status.data?.default_model ?? models[0] ?? "");
 
@@ -249,13 +253,15 @@ export function NaiSplitPanel({
                   : "bg-accent-amber",
             )}
           />
-          {up
-            ? loaded.length
-              ? `loaded: ${loaded.map((r) => `${r.model} (${r.state})`).join(", ")}`
-              : "LLM server up — model loads on first use"
-            : "LLM server offline"}
+          {remote
+            ? `remote endpoint — ${status.data?.target ?? "configured in Settings"}`
+            : up
+              ? loaded.length
+                ? `loaded: ${loaded.map((r) => `${r.model} (${r.state})`).join(", ")}`
+                : "LLM server up — model loads on first use"
+              : "LLM server offline"}
         </span>
-        {!up && (
+        {!up && !remote && (
           <button
             type="button"
             className="pf-btn h-7 px-2 text-xs"
@@ -270,7 +276,7 @@ export function NaiSplitPanel({
             Start server
           </button>
         )}
-        {serverTtl !== null && (
+        {serverTtl !== null && !remote && (
           <span
             className="flex items-center gap-1 text-text-subtle"
             title="Idle minutes before the model is unloaded from VRAM. 0 = keep it loaded indefinitely. Applies live via llama-swap's config watch."
@@ -296,7 +302,7 @@ export function NaiSplitPanel({
             )}
           </span>
         )}
-        {up && loaded.length > 0 && (
+        {up && !remote && loaded.length > 0 && (
           <button
             type="button"
             className="pf-btn-ghost h-7 px-2 text-xs"
@@ -352,20 +358,29 @@ export function NaiSplitPanel({
             label="enrich background"
           />
         </span>
-        <select
-          className="pf-input h-9 w-auto font-mono text-xs"
-          value={effectiveModel}
-          onChange={(e) => setModel(e.target.value)}
-          disabled={!models.length}
-          title="Local model (llama-swap swaps on demand)"
-        >
-          {models.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-          {!models.length && <option value="">no models</option>}
-        </select>
+        {remote ? (
+          <span
+            className="pf-pill h-9 font-mono text-xs text-text-muted"
+            title="Set under Settings → LLM providers. Picking a local model here would override it."
+          >
+            {effectiveModel || "no model set"}
+          </span>
+        ) : (
+          <select
+            className="pf-input h-9 w-auto font-mono text-xs"
+            value={effectiveModel}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={!models.length}
+            title="Local model (llama-swap swaps on demand)"
+          >
+            {models.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+            {!models.length && <option value="">no models</option>}
+          </select>
+        )}
         <button
           type="button"
           className="pf-btn-primary h-9 px-3"

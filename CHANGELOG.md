@@ -10,6 +10,25 @@ and `backend/pyproject.toml` — and read from there everywhere else (the
 sidebar footer, Settings → About, and `GET /api/health`). Bump both, and
 add an entry here, in the same commit as the change.
 
+## 0.8.1 — 2026-08-02
+
+### Fixed
+- **The splitter panel ignored a remote endpoint.** Its model dropdown was
+  always populated from the local llama-swap server and sent that name
+  explicitly, which overrode the configured model — so selecting OpenAI in
+  Settings still ran the local Qwen. The panel now reports the resolved
+  target, shows the configured model read-only, and hides the
+  llama-swap-only controls (start, unload, idle TTL) when pointed
+  elsewhere.
+- **Testing the splitter demanded a package it never uses.** The test
+  routed through the OpenAI SDK and failed with "Stage 3 (openai) needs
+  the `[llm]` extras", even though the splitter speaks plain HTTP. It now
+  tests over the same path it actually uses.
+- `openai` and `anthropic` moved into `backend/requirements.txt`. They
+  were optional extras that `scripts/dev.bat` never installed, so Stage 3
+  classification failed on a fresh clone despite being the documented
+  default.
+
 ## 0.8.0 — 2026-08-02
 
 ### Added

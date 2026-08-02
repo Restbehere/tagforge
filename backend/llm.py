@@ -542,8 +542,28 @@ def set_ttl_minutes(minutes: int) -> dict[str, Any]:
 
 
 def server_status() -> dict[str, Any]:
-    """Reachability + configured + currently loaded models."""
-    base = settings.LLAMA_SWAP_URL
+    """Reachability + configured + currently loaded models.
+
+    When the splitter points at a remote endpoint there is no llama-swap to
+    inspect: report the configured target instead so the UI stops offering
+    local models (picking one would override the configured model) and
+    hides the local-only server controls.
+    """
+    from . import llm_config
+
+    target = llm_config.get_target("splitter")
+    if not target.is_local:
+        return {
+            "up": True,
+            "models": [target.model] if target.model else [],
+            "running": [],
+            "default_model": target.model or None,
+            "ttl_minutes": None,
+            "remote": True,
+            "target": target.describe(),
+        }
+
+    base = target.base_url or settings.LLAMA_SWAP_URL
     try:
         with httpx.Client(timeout=3) as c:
             models = [
@@ -553,12 +573,17 @@ def server_status() -> dict[str, Any]:
                 {"model": r.get("model"), "state": r.get("state")}
                 for r in c.get(f"{base}/running").json().get("running", [])
             ]
+        preferred = target.model or DEFAULT_MODEL
         return {
             "up": True,
             "models": models,
             "running": running,
-            "default_model": DEFAULT_MODEL if DEFAULT_MODEL in models else (models[0] if models else None),
+            "default_model": (
+                preferred if preferred in models else (models[0] if models else None)
+            ),
             "ttl_minutes": get_ttl_minutes(),
+            "remote": False,
+            "target": target.describe(),
         }
     except Exception:
         return {
@@ -567,6 +592,8 @@ def server_status() -> dict[str, Any]:
             "running": [],
             "default_model": None,
             "ttl_minutes": get_ttl_minutes(),
+            "remote": False,
+            "target": target.describe(),
         }
 
 

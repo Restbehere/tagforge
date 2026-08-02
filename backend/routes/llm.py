@@ -172,15 +172,31 @@ def test_llm_config(body: LlmTestIn) -> dict[str, Any]:
         if target.kind == "anthropic":
             return {"ok": False, "detail": "no test implemented for Anthropic yet"}
 
+        probe = [{"role": "user", "content": "Reply with the single word: ok"}]
+        if body.feature == "splitter":
+            # The splitter speaks plain HTTP, never the OpenAI SDK — testing
+            # it through the SDK would demand the [llm] extras it does not use.
+            url, headers, model, _local = svc._chat_target(None)
+            if not model:
+                return {"ok": False, "detail": "no model set for the splitter"}
+            with httpx.Client(timeout=30.0) as c:
+                r = c.post(
+                    url,
+                    headers=headers,
+                    json={"model": model, "messages": probe, "max_tokens": 8},
+                )
+            if r.status_code >= 400:
+                return {"ok": False, "detail": f"HTTP {r.status_code}: {r.text[:200]}"}
+            got = (r.json()["choices"][0]["message"]["content"] or "").strip()
+            return {"ok": True, "detail": f"{model} replied: {got[:60]!r}"}
+
         from ..ingest.stage3_llm import _get_openai_client
 
         client = _get_openai_client(
             base_url=target.base_url, api_key=target.api_key(), timeout=30.0
         )
         resp = client.chat.completions.create(
-            model=target.model,
-            messages=[{"role": "user", "content": "Reply with the single word: ok"}],
-            max_tokens=8,
+            model=target.model, messages=probe, max_tokens=8
         )
         got = (resp.choices[0].message.content or "").strip()
         return {"ok": True, "detail": f"{target.describe()} replied: {got[:60]!r}"}
