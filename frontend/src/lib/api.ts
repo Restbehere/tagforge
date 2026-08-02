@@ -889,6 +889,9 @@ export interface LlmConfigResponse {
   key_hints: { stage3: string; splitter: string };
   suggested_models: { stage3: string[]; splitter: string[] };
   kinds: LlmKind[];
+  /** Model to prefill when switching provider; blank where the endpoint
+   *  picks its own (local) or none is universal (gateways). */
+  default_models: Record<LlmKind, string>;
 }
 
 export const llmApi = {

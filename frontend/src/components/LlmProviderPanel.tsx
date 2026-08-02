@@ -117,6 +117,10 @@ function FeatureForm({
   const isEcho = form.kind === "echo";
   const needsUrl = form.kind === "openai_compatible";
   const hint = data.key_hints[feature];
+  // Only llama-swap can pick a model for itself; everywhere else a blank
+  // one has nothing to fall back on.
+  const needsModel = !isLocal && !isEcho;
+  const missingModel = needsModel && !form.model.trim();
 
   return (
     <div className="rounded border border-line bg-bg-subtle/30 p-3">
@@ -132,7 +136,17 @@ function FeatureForm({
           <select
             className="pf-input"
             value={form.kind}
-            onChange={(e) => set("kind", e.target.value as LlmKind)}
+            onChange={(e) => {
+              const kind = e.target.value as LlmKind;
+              setForm((p) => ({
+                ...p,
+                kind,
+                // Prefill a model when the field is empty, rather than
+                // leaving a remote provider model-less. Never clobber a
+                // name the user typed.
+                model: p.model.trim() || data.default_models[kind] || "",
+              }));
+            }}
           >
             {data.kinds.map((k) => (
               <option key={k} value={k}>
@@ -153,17 +167,29 @@ function FeatureForm({
           }
         >
           <input
-            className="pf-input font-mono text-xs"
+            className={`pf-input font-mono text-xs${
+              missingModel ? " border-accent-rose/50" : ""
+            }`}
             list={listId}
             value={form.model}
             onChange={(e) => set("model", e.target.value)}
-            placeholder={isLocal ? "(server default)" : "e.g. gpt-4.1-mini"}
+            // A greyed-out "e.g. gpt-4.1-mini" reads as a filled field at a
+            // glance, which is how an empty model got saved and then sent
+            // the local model's name to OpenAI. Say it is required instead.
+            placeholder={isLocal ? "(server default)" : "required"}
           />
           <datalist id={listId}>
             {(data.suggested_models[feature] ?? []).map((m) => (
               <option key={m} value={m} />
             ))}
           </datalist>
+          {missingModel && (
+            <p className="mt-1 text-[11px] text-accent-rose">
+              {form.kind === "openai_compatible"
+                ? "Required — use the model slug your gateway publishes."
+                : "Required — this provider has no default to fall back on."}
+            </p>
+          )}
         </Field>
 
         {needsUrl && (
@@ -244,7 +270,8 @@ function FeatureForm({
         <button
           type="button"
           className="pf-btn-primary h-8 px-3 text-xs"
-          disabled={saveMut.isPending}
+          disabled={saveMut.isPending || missingModel}
+          title={missingModel ? "Enter a model name first" : undefined}
           onClick={() => saveMut.mutate()}
         >
           {saveMut.isPending ? (
@@ -255,9 +282,13 @@ function FeatureForm({
         <button
           type="button"
           className="pf-btn h-8 px-3 text-xs"
-          disabled={testMut.isPending}
+          disabled={testMut.isPending || missingModel}
           onClick={() => testMut.mutate()}
-          title="Send one tiny request so a bad URL, key or model name surfaces now rather than mid-run"
+          title={
+            missingModel
+              ? "Enter a model name first"
+              : "Send one tiny request so a bad URL, key or model name surfaces now rather than mid-run"
+          }
         >
           {testMut.isPending ? (
             <Loader2 size={12} className="mr-1 inline animate-spin" />

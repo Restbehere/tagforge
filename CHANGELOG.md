@@ -10,6 +10,27 @@ and `backend/pyproject.toml` — and read from there everywhere else (the
 sidebar footer, Settings → About, and `GET /api/health`). Bump both, and
 add an entry here, in the same commit as the change.
 
+## 0.8.3 — 2026-08-02
+
+### Fixed
+- **Selecting a hosted provider without naming a model asked it for the
+  local one.** A blank model fell back to the bundled llama-swap default,
+  so choosing OpenAI and leaving the model empty produced a baffling
+  `404 — the model 'qwen3.6-27b-abliterated' does not exist`, naming a
+  model the user had never selected. A blank model means "let the endpoint
+  choose", which only llama-swap can do; everywhere else it is now a
+  configuration error naming the feature and pointing at Settings.
+
+  The same fallback in Stage 3 referenced an identifier that was never
+  imported, so clearing its model raised `NameError` instead. Both go
+  through one checked helper now.
+
+- The Settings model field no longer looks filled when it is empty. Its
+  placeholder read `e.g. gpt-4.1-mini` in the same monospace as a real
+  value — which is how the empty model got saved in the first place. A
+  provider that needs a model now shows a required state and blocks Save,
+  and switching provider prefills that provider's default.
+
 ## 0.8.2 — 2026-08-02
 
 ### Fixed

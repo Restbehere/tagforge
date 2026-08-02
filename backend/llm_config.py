@@ -45,6 +45,27 @@ KINDS = ("openai", "openai_compatible", "anthropic", "local", "echo")
 DEFAULT_OPENAI_STAGE3_MODEL = "gpt-4.1-mini"
 DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5"
 
+# What to prefill when the user switches provider. Only the local server can
+# pick a model on its own, so every remote kind needs a concrete name here —
+# see Target.require_model for why a blank one cannot be defaulted later.
+DEFAULT_MODEL_BY_KIND = {
+    "openai": DEFAULT_OPENAI_STAGE3_MODEL,
+    "anthropic": DEFAULT_ANTHROPIC_MODEL,
+    "openai_compatible": "",  # gateway-specific; the datalist suggests some
+    "local": "",
+    "echo": "",
+}
+
+FEATURE_LABELS = {"stage3": "tag classification", "splitter": "the prompt splitter"}
+
+
+class LlmConfigError(RuntimeError):
+    """The configured endpoint cannot be used as-is (e.g. no model name).
+
+    A user-facing message: routes surface it verbatim rather than as a
+    provider error, because the fix is in Settings, not the network.
+    """
+
 # Open-weights endpoints worth suggesting, surfaced in the UI as a datalist.
 # Slugs drift, so the UI tells users to confirm against the provider.
 SUGGESTED_MODELS = {
@@ -251,6 +272,24 @@ class Target:
 
     def api_key(self) -> str:
         return get_api_key(self.feature)
+
+    def require_model(self, local_default: str = "") -> str:
+        """The model name to send, or a clear error when there is none.
+
+        A blank model means "let the endpoint choose", which only the local
+        llama-swap server can do. Falling back to the local model name on a
+        remote provider is worse than failing: it produced a bewildering
+        404 from OpenAI naming a local model the user had never selected.
+        """
+        if self.model:
+            return self.model
+        if self.is_local and local_default:
+            return local_default
+        raise LlmConfigError(
+            f"No model set for {FEATURE_LABELS.get(self.feature, self.feature)}. "
+            f"'{self.kind}' has no default to fall back on — set a model name "
+            "under Settings → LLM providers."
+        )
 
     def describe(self) -> str:
         return f"{self.kind}:{self.model or 'default'}"

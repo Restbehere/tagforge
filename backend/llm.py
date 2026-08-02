@@ -50,7 +50,10 @@ def _chat_target(model: str | None) -> tuple[str, dict[str, str], str, bool]:
         key = target.api_key()
         if key:
             headers["Authorization"] = f"Bearer {key}"
-    chosen = model or target.model or DEFAULT_MODEL
+    # DEFAULT_MODEL is a llama-swap entry, so it is only a legitimate
+    # fallback when this points at llama-swap; require_model raises
+    # otherwise rather than asking OpenAI for a model it has never heard of.
+    chosen = (model or "").strip() or target.require_model(DEFAULT_MODEL)
     # Providers publish their base URL with the version already on it
     # ("https://openrouter.ai/api/v1"), so appending another /v1 would 404.
     suffix = "/chat/completions" if base.endswith("/v1") else "/v1/chat/completions"

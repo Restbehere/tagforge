@@ -418,7 +418,10 @@ def reclassify_residuals(
         provider = "openai"
     if provider not in _DISPATCH:
         raise ValueError(f"unknown LLM provider: {provider}")
-    model = model or target.model or DEFAULT_MODEL
+    # (DEFAULT_MODEL is llama-swap's, hence only offered to a local target.)
+    from ..llm import DEFAULT_MODEL
+
+    model = model or target.require_model(DEFAULT_MODEL)
     concurrency = int(concurrency) or target.max_concurrency
     # Gateways on free/low tiers reject the default 6-way fan-out.
     concurrency = max(1, min(12, concurrency, target.max_concurrency))

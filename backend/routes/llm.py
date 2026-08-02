@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import llm as svc
+from .. import llm_config
 
 router = APIRouter()
 
@@ -63,6 +64,10 @@ def _call_llm(fn, *args) -> dict[str, Any]:
         raise HTTPException(502, f"LLM connection failed mid-request: {exc}")
     except svc.LlmOutputError as exc:
         raise HTTPException(502, str(exc))
+    except llm_config.LlmConfigError as exc:
+        # Misconfiguration, not a backend failure — 400 so the UI shows the
+        # message as-is instead of "LLM backend error".
+        raise HTTPException(400, str(exc))
 
 
 @router.post("/nai-split")
@@ -113,13 +118,14 @@ class LlmConfigIn(BaseModel):
 
 
 def _config_payload() -> dict[str, Any]:
-    from .. import llm_config
-
     return {
         "config": llm_config.load_config(),
         "key_hints": llm_config.key_hints(),
         "suggested_models": llm_config.SUGGESTED_MODELS,
         "kinds": list(llm_config.KINDS),
+        # Lets the form prefill a model when the provider changes, so a
+        # remote endpoint is never saved without one.
+        "default_models": llm_config.DEFAULT_MODEL_BY_KIND,
     }
 
 
@@ -177,8 +183,6 @@ def test_llm_config(body: LlmTestIn) -> dict[str, Any]:
             # The splitter speaks plain HTTP, never the OpenAI SDK — testing
             # it through the SDK would demand the [llm] extras it does not use.
             url, headers, model, _local = svc._chat_target(None)
-            if not model:
-                return {"ok": False, "detail": "no model set for the splitter"}
             with httpx.Client(timeout=30.0) as c:
                 r = c.post(
                     url,
@@ -196,10 +200,13 @@ def test_llm_config(body: LlmTestIn) -> dict[str, Any]:
             base_url=target.base_url, api_key=target.api_key(), timeout=30.0
         )
         resp = client.chat.completions.create(
-            model=target.model, messages=probe, max_tokens=8
+            model=target.require_model(), messages=probe, max_tokens=8
         )
         got = (resp.choices[0].message.content or "").strip()
         return {"ok": True, "detail": f"{target.describe()} replied: {got[:60]!r}"}
+    except llm_config.LlmConfigError as exc:
+        # A settings problem, not a provider failure — say so plainly.
+        return {"ok": False, "detail": str(exc)}
     except Exception as exc:
         # Never surface a key that a provider echoed back in an error URL.
         from ..jobs import redact_secrets
