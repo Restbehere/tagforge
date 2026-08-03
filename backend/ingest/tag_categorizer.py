@@ -95,15 +95,20 @@ PRIORITY_MAP: list[tuple[str, str]] = [
     ("Skirts", "outfit"),
     ("Pants", "outfit"),
     ("Bottoms", "outfit"),
-    # pose / action
-    ("Posture", "pose"),
-    ("Sex acts", "pose"),
-    ("Verbs and Gerunds", "pose"),
-    # expression (eye *colors* are stripped earlier via :func:`is_eye_color_tag`)
+    # Armor is worn, so it belongs with attire — above the generic Objects
+    # rule below, which would otherwise file pauldrons as a prop.
+    ("armor", "outfit"),
+    # expression BEFORE pose: the tree files facial expressions under both
+    # "Face tags" and the catch-all verb list, and trembling / pout /
+    # screaming / staring / ahegao are expressions first. (Eye *colors* are
+    # stripped earlier via :func:`is_eye_color_tag`.)
     ("Face tags", "expression"),
     ("Eyes tags", "expression"),
     ("Mouth", "expression"),
     ("Tears", "expression"),
+    # pose / action
+    ("Posture", "pose"),
+    ("Sex acts", "pose"),
     # background / scene
     ("Backgrounds", "background"),
     ("Locations", "background"),
@@ -135,7 +140,84 @@ PRIORITY_MAP: list[tuple[str, str]] = [
     ("Items", "extras"),
     ("Furniture", "extras"),
     ("Props", "extras"),
+    # LAST. "Verbs and Gerunds / tagged verbs" is a flat catch-all holding
+    # anything verb-shaped — trembling and screaming sit in it beside
+    # foreshortening and glowing. As a high-priority rule it dragged
+    # expressions and camera techniques into pose; as a last resort it only
+    # answers for tags no precise section claims.
+    ("Verbs and Gerunds", "pose"),
 ]
+
+
+# A path segment that marks its leaves as anatomy, whatever section it is
+# nested under. The tree files body parts beneath Attire ("Body parts
+# supposed to wear dresses" holds `back` and `navel`; "Anatomy of the neck"
+# holds `collarbone`) and beneath Creatures ("Cat body parts" holds
+# `cat_ears`), so those tags were being classified as clothing and props.
+# The bare "Body parts" trunk is deliberately still allowed through.
+# Some tree keys pack several levels into one string ("Misc / Actions,
+# Objects, Containers, Etc."), so each segment is split again on "/".
+def _parts(segment: str) -> list[str]:
+    return [p.strip().lower() for p in segment.split("/")]
+
+
+def _is_anatomy_segment(segment: str) -> bool:
+    return any(
+        (p != "body parts" and "body parts" in p)
+        or p.startswith("anatomy of")
+        # "Objects / armor / Personalities" holds soldier and viking — roles,
+        # not equipment.
+        or p == "personalities"
+        for p in _parts(segment)
+    )
+
+
+# Joined-path fragments that carry no real signal. "Face tags / Misc" is a
+# junk drawer holding `portrait` (a framing choice) and `smiley_face` (a
+# drawn symbol) beside genuine expressions.
+_JUNK_PATHS: tuple[str, ...] = ("face tags / misc",)
+
+
+# Tags the tree files somewhere actively misleading, with no better path to
+# fall back to. Deliberately tiny — every entry is a place upstream's
+# taxonomy disagrees with what the tag actually describes.
+#
+# There is no general rule here on purpose: the tree's "Actions" containers
+# hold states as well as verbs (`torn_dress` and `poolside` sit beside
+# `kissing_neck`), so promoting that segment wholesale mislabelled more tags
+# than it fixed. These are the individual leaves worth correcting.
+#
+# The tag tree carries no twintail entry at all, so with the anatomy regex
+# no longer swallowing the family Stage 1 would have no opinion on ~25k tag
+# references. One rule names the whole hairstyle family instead of listing
+# thirty spellings: an all-lowercase name ending in twintail(s), short
+# enough not to be one of the corpus's concatenated-prompt junk tags, and
+# not an action performed on them.
+_TWINTAIL_RE = re.compile(r"^[a-z_]*twintails?(?:_hair)?$")
+_TWINTAIL_VERBS = ("grabbing", "holding", "pulling", "adjusting", "hold_up")
+
+
+def _is_twintail_hairstyle(name: str) -> bool:
+    return (
+        len(name) <= 40
+        and bool(_TWINTAIL_RE.match(name))
+        and not any(v in name for v in _TWINTAIL_VERBS)
+    )
+
+
+_TREE_OVERRIDES: dict[str, str] = {
+    # Only the catch-all verb list claims it, and it is a lighting effect.
+    "glowing": "extras",
+    # Filed under the thing they act on, not as the act.
+    "adjusting_eyewear": "pose",
+    "arm_around_neck": "pose",
+    "arms_around_neck": "pose",
+    "kissing_neck": "pose",
+    "neck_biting": "pose",
+    "drinking": "pose",
+    "splashing": "pose",
+    "spilling": "pose",
+}
 
 
 @dataclass
@@ -220,7 +302,14 @@ def _load_tag_tree() -> dict[str, str]:
 def _rank_bucket_for_path(path_stack: Iterable[str]) -> tuple[int, str]:
     """(PRIORITY_MAP rank, bucket) for one leaf path; unmapped ranks last so
     any real bucket from another occurrence of the tag beats 'other'."""
-    joined = " / ".join(path_stack)
+    segments = list(path_stack)
+    joined = " / ".join(segments)
+    # An anatomy container disowns whatever section encloses it: `navel`
+    # living under Attire does not make it clothing.
+    if any(_is_anatomy_segment(seg) for seg in segments):
+        return len(PRIORITY_MAP), "other"
+    if any(frag in joined.lower() for frag in _JUNK_PATHS):
+        return len(PRIORITY_MAP), "other"
     for rank, (needle, bucket) in enumerate(PRIORITY_MAP):
         if needle in joined:
             return rank, bucket
@@ -286,6 +375,7 @@ _QUALIFIER_SUFFIX_BUCKET: dict[str, str] = {
     # names. Without these, shower_(place) and diamond_(shape) fell through
     # to the franchise fallback and were exported as characters.
     "place": "background",
+    "clothing": "outfit",  # whale_tail_(clothing) is a garment, not a person
     "shape": "extras",
     "symbol": "extras",
     "cheerleading": "extras",  # pom_pom_(cheerleading) — the prop
@@ -298,7 +388,9 @@ _QUALIFIER_SUFFIX_BUCKET: dict[str, str] = {
 # genderswap_(mtf), crossdressing_(ftm). No scene bucket fits cleanly, so
 # they must fall through to the tree / Stage 2/3 instead of being stamped
 # 'character' by the franchise fallback.
-_NON_FRANCHISE_QUALIFIERS: frozenset[str] = frozenset({"mtf", "ftm", "otf"})
+_NON_FRANCHISE_QUALIFIERS: frozenset[str] = frozenset(
+    {"mtf", "ftm", "otf", "female", "male"}
+)
 
 _QUALIFIER_RE = re.compile(r"^(?P<base>.+?)_\((?P<qualifier>[a-z0-9_\-+&!\.']+)\)$")
 
@@ -331,11 +423,21 @@ def _classify_qualifier_suffix(name: str) -> tuple[str, str, float] | None:
 def _is_franchise_disambiguation(name: str) -> bool:
     """``<base>_(<qualifier>)`` with a qualifier we have no rule for —
     Danbooru's character form (``hatsune_miku_(vocaloid)``), assumed only
-    once every deterministic lookup has failed."""
+    once every deterministic lookup has failed.
+
+    A qualifier we DO have an opinion about is never a franchise, including
+    the ones mapped to ``other`` on purpose: ``_(meme)`` tags name a joke,
+    not a character, and moving the fallback after the tree lookup had
+    started sweeping all ~90 of them into the character bucket.
+    """
     m = _QUALIFIER_RE.match(name)
     if m is None:
         return False
-    return m.group("qualifier").lower() not in _NON_FRANCHISE_QUALIFIERS
+    qualifier = m.group("qualifier").lower()
+    return (
+        qualifier not in _NON_FRANCHISE_QUALIFIERS
+        and qualifier not in _QUALIFIER_SUFFIX_BUCKET
+    )
 
 
 def _is_anthro_subject(name: str) -> bool:
@@ -407,6 +509,25 @@ def classify_tag(name: str) -> TagAssignment:
             bucket=q_bucket,
             bucket_source=q_source,
             confidence=q_conf,
+            category=category,
+        )
+
+    if _is_twintail_hairstyle(name):
+        return TagAssignment(
+            name=name,
+            bucket="accessory",
+            bucket_source="tag_tree",
+            confidence=0.95,
+            category=category,
+        )
+
+    override = _TREE_OVERRIDES.get(name)
+    if override:
+        return TagAssignment(
+            name=name,
+            bucket=override,
+            bucket_source="tag_tree",
+            confidence=0.95,
             category=category,
         )
 

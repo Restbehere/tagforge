@@ -10,6 +10,55 @@ and `backend/pyproject.toml` — and read from there everywhere else (the
 sidebar footer, Settings → About, and `GET /api/health`). Bump both, and
 add an entry here, in the same commit as the change.
 
+## 0.9.3 — 2026-08-03
+
+Follow-up to 0.9.2's classification fixes, driven by a full before/after
+review of every tag the repair would move. The corpus repair has been
+applied: 357 tags re-bucketed and 35 released, with a database backup
+taken first and every change in the relabel history.
+
+### Fixed
+- **Expressions now beat the verb catch-all.** `PRIORITY_MAP` ranked pose
+  above expression, and the tree's flat "tagged verbs" list contains
+  anything verb-shaped — so `trembling`, `ahegao`, `pout`, `screaming` and
+  friends were about to be re-bucketed into pose. Expression now outranks
+  pose, and the verb catch-all only answers when no precise section claims
+  the tag (it was also claiming `foreshortening` and `glowing`).
+- **Anatomy nested under other sections is no longer claimed by them.**
+  The tree files `back` and `navel` under Attire ("Body parts supposed to
+  wear dresses"), `collarbone` under "Anatomy of the neck", and `cat_ears`
+  under "Cat body parts" — all were about to become clothing and props.
+  Anatomy containers now disown their enclosing section, leaving those
+  tags wherever Stage 2/3 or the user already put them.
+- **The twintails family is classified as the hairstyle it is.** The tree
+  has no twintail entry, so after 0.9.2 stopped excluding them they were
+  merely unstuck, not placed. A single rule now routes the whole family
+  (38 spellings on this corpus) to accessory while leaving actions like
+  `grabbing_another's_twintails` excluded.
+- **`_(meme)` tags are never characters.** 0.9.2's qualifier reordering
+  made unknown-qualifier handling reachable for mapped-to-nothing
+  qualifiers, so meme tags started being stamped `character` — ~1,000
+  would have moved; 29 already stamped during one evening's ingests are
+  released back to the residual pool, along with `genderswap_(mtf)` and
+  the other transformation qualifiers stamped before the rule existed.
+- **Names merely ending in "tail" are not anatomy.** The tail exclusion
+  matched mid-word, so `flametail_(arknights)`, `cottontail_(vtuber)` and
+  `cattail` were filed as body parts and stripped from scene output. The
+  token must now stand alone, and any parenthesised qualifier marks a
+  proper noun. Deliberately NOT released wholesale: the same staleness
+  check would have dragged `high_detail`/`intricate_details` (quality
+  junk the old regex caught by accident, correctly sitting in
+  quality_meta) into scene wildcards.
+- `portrait` and `smiley_face` stay composition — "Face tags / Misc" is a
+  junk drawer, not evidence of an expression; armour (`pauldrons`,
+  `shoulder_pads`) is worn and routes to outfit; `soldier`/`viking` are
+  roles, not armour; `whale_tail_(clothing)` is a garment, not a
+  character.
+- `Re-apply stage 1 rules` gains `release_stale`: a tag whose bucket was
+  stamped by the franchise-suffix guess is reset to residual when the
+  narrowed rule no longer claims it, so rule fixes cannot leave stale
+  `character` labels behind.
+
 ## 0.9.2 — 2026-08-02
 
 A full-codebase audit — nine subsystems, every finding independently

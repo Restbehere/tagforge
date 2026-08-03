@@ -108,6 +108,10 @@ class Stage1ReclassifyBody(BaseModel):
     # Also touch tags currently classified as ``other``/``unknown`` (these
     # are always safe to upgrade since the new Stage 1 result is better).
     touch_other: bool = True
+    # Reset tags whose bucket came from the franchise-suffix guess when that
+    # rule no longer claims them, so a narrowed rule does not leave stale
+    # ``character`` labels behind.
+    release_stale: bool = True
     rebuild_scenes: bool = True
 
 
@@ -293,6 +297,8 @@ def _run_stage1_reclassify(job_id: int, body: dict[str, Any]) -> None:
     """Walk every Tag and upgrade its bucket if Stage 1 now does better."""
     cap = float(body.get("replace_below_confidence", 0.85))
     touch_other = bool(body.get("touch_other", True))
+    release_stale = bool(body.get("release_stale", True))
+    released = 0
     try:
         jobs.update_job(
             job_id, status="running", progress=0.05, message="scanning tag taxonomy"
@@ -308,8 +314,48 @@ def _run_stage1_reclassify(job_id: int, body: dict[str, Any]) -> None:
 
         for i, (tag_id, tag_name) in enumerate(tag_rows, start=1):
             assignment = classify_tag(tag_name)
-            # Skip if Stage 1 still has nothing to say.
+            # Stage 1 has nothing to say. Normally that means leave the tag
+            # alone — but a bucket STAMPED by the franchise-suffix guess is
+            # only as good as that guess, and the rule has since been
+            # narrowed (a `_(meme)` tag names a joke, `_(mtf)` a
+            # transformation; neither is a character). Release those back to
+            # the residual pool so Stage 2/3 can route them properly.
+            #
+            # Deliberately limited to franchise_suffix: the same treatment
+            # applied to scene_exclude would drag `high_detail` and friends
+            # out of quality_meta and into scene wildcards, and applied to
+            # tag_tree would dump 90k references of anatomy into the queue.
             if assignment.bucket == "other" or assignment.bucket_source == "unknown":
+                if release_stale:
+                    with db.session_scope() as s:
+                        tag = s.get(Tag, tag_id)
+                        if (
+                            tag is not None
+                            and not tag.locked
+                            and tag.bucket_source == "franchise_suffix"
+                            and tag.bucket != "other"
+                        ):
+                            record_change(
+                                s,
+                                tag,
+                                new_bucket="other",
+                                new_source="unknown",
+                                new_confidence=0.0,
+                                model=None,
+                                job_id=job_id,
+                            )
+                            by_from_bucket[tag.bucket] = (
+                                by_from_bucket.get(tag.bucket, 0) + 1
+                            )
+                            by_new_source["released"] = (
+                                by_new_source.get("released", 0) + 1
+                            )
+                            tag.bucket = "other"
+                            tag.bucket_source = "unknown"
+                            tag.confidence = 0.0
+                            tag.updated_at = datetime.utcnow()
+                            s.add(tag)
+                            released += 1
                 if i % 2000 == 0 or i == total:
                     jobs.update_job(
                         job_id,
@@ -413,12 +459,17 @@ def _run_stage1_reclassify(job_id: int, body: dict[str, Any]) -> None:
             job_id,
             status="done",
             progress=1.0,
-            message=f"upgraded {upgraded:,}/{total:,} tags via stage-1 rules",
+            message=(
+                f"upgraded {upgraded:,}/{total:,} tags via stage-1 rules"
+                + (f", released {released:,}" if released else "")
+            ),
             detail={
                 "scanned": total,
                 "upgraded": upgraded,
+                "released": released,
                 "replace_below_confidence": cap,
                 "touch_other": touch_other,
+                "release_stale": release_stale,
                 "by_new_source": by_new_source,
                 "by_from_bucket": by_from_bucket,
             },

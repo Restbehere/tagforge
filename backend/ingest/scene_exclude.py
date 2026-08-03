@@ -81,13 +81,16 @@ _SUBJECT_COUNTER_RE = re.compile(
     r"|^1girl_1boy$"
 )
 
-# Safe tail/wings/breasts matching without catching ``ponytail``, ``detail``,
-# or the twintails hairstyle family, etc.
+# ``tail`` must be a whole underscore-delimited token. Matching it anywhere
+# swallowed every name that merely ends in the letters — ``cottontail``,
+# ``swallowtail``, ``huntail``, ``flametail_(arknights)``, ``cattail`` —
+# and filed those characters and plants as anatomy.
 _TAIL_RE = re.compile(
     r"^(no_)?tail(s)?$"
-    r"|(?<!pony)(?<!twin)tail(s)?(_|$)"
+    r"|(?:^|_)tail(s)?(?:_|$)"
     r"|_(?:cat|dog|fox|dragon|demon|snake|fish|fluffy|long|short|multiple)_tail$"
 )
+_QUALIFIED_NAME_RE = re.compile(r"_\([a-z0-9_\-+&!.':]+\)$")
 _WINGS_RE = re.compile(r"^(no_|alternate_)?wings$|_wings$")
 _BREASTS_RE = re.compile(
     r"^breasts$"
@@ -178,6 +181,13 @@ def is_scene_excluded(name: str) -> bool:
     """Return True if ``name`` must not appear in scene buckets / Builder rolls."""
     n = name.strip().lower().replace(" ", "_")
     if not n:
+        return False
+    # A parenthesised qualifier marks a disambiguated proper noun, so the
+    # anatomy heuristics below must not read it as body text:
+    # flametail_(arknights) and tail_(honkai:_star_rail) are characters,
+    # cattail_(plants_vs._zombies) is a plant. Let the character rules
+    # classify them instead of filing them as body parts.
+    if _QUALIFIED_NAME_RE.search(n):
         return False
     if is_eye_color_tag(n):
         return True
