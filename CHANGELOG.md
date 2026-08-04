@@ -10,6 +10,26 @@ and `backend/pyproject.toml` — and read from there everywhere else (the
 sidebar footer, Settings → About, and `GET /api/health`). Bump both, and
 add an entry here, in the same commit as the change.
 
+## 0.9.4 — 2026-08-05
+
+### Changed
+- **Multi-character splits no longer render synchronized clones.** When a
+  group image's tags carried an unattributed action (`arms_up`,
+  `holding_swimsuit`, `innertube`...), the splitter hedged by copying it to
+  every character — three girls, all arms up, when the source had one. The
+  splitter prompt now teaches union semantics: a pose/action/held-object/
+  clothing-state tag describes SOME character, usually one, so distinct
+  actions are distributed across characters and a one-character guess beats
+  duplication. Mutual activities (dancing, holding hands, hugs) stay
+  all-participant interaction in base, and expressions may still repeat.
+
+  Measured on a fixed 6-case set (2 runs each, local 27B): duplicated
+  singleton actions fell from 4/14 to 1/14 observations on the reference
+  beach scene (strip mode) and 2/14 to 1/14 (keep mode), with mutual
+  activities, distinct-pose distribution, and single-character splits
+  unchanged. Genuine group-photo compositions (four girls all flashing
+  peace signs, nothing else to distribute) still read as a group photo.
+
 ## 0.9.3 — 2026-08-03
 
 Follow-up to 0.9.2's classification fixes, driven by a full before/after
