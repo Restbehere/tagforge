@@ -207,7 +207,7 @@ Invented and enriched backgrounds must also be CLEAN and legible: the image mode
 
 The background_tags field: comma-separated tags ONLY when Background mode is INVENT or ENRICH as described above; otherwise it MUST be an empty string.
 
-Identity STRIP mode (when the prompt says Identity: STRIP): the user will substitute their OWN characters into this scene, so the output must be character-agnostic. Character prompts keep ONLY transferable elements - clothing, accessories, expression, personal pose/action - and still start with "girl, " or "boy, ". OMIT character name tags, series/copyright tags, and every innate physical trait: hair colour/length/style (blonde hair, long hair, twintails, ahoge, bangs...), eye colour/shape, pupil shape, skin tone, breast/body size, height/age descriptors, facial marks, and species features (animal ears, horns, tails, wings, fangs, pointy ears) - unless a species feature is explicitly a costume piece (fake animal ears stay). The same applies to base_prompt and scene_description: no names, no series, no innate traits; refer to characters generically (the girl, the boy). Identity: KEEP means normal behavior."""
+Identity STRIP mode (when the prompt says Identity: STRIP): the user will substitute their OWN characters into this scene, so the output must be character-agnostic. Character prompts keep ONLY transferable elements - clothing, accessories, expression, personal pose/action - and still start with "girl, " or "boy, ". OMIT character name tags, series/copyright tags, and every innate physical trait: hair colour/length/style (blonde hair, long hair, twintails, ahoge, bangs...), eye colour/shape, pupil shape, skin tone, breast/body size, height/age descriptors, facial marks, and species features (animal ears, horns, tails, wings, halo, fangs, pointy ears) - unless a species feature is explicitly a costume piece (fake animal ears stay). Modified variants are STILL the same innate feature and must go too: purple wings, low wings, multiple horns, black halo, demon tail are all wings/horns/halo/tail. The same applies to base_prompt and scene_description: no names, no series, no innate traits - describe the pose and setting WITHOUT mentioning wings, horns, halos, tails or ears at all; refer to characters generically (the girl, the boy). Identity: KEEP means normal behavior."""
 
 NAI_COMPOSE_SYSTEM = """You author NovelAI V4.5 image prompts from a user's idea. NAI V4.5 understands Danbooru tags AND natural language: the strongest prompts mix both - concrete visual attributes as comma-separated tags, and spatial arrangement / story / interaction as short sentences ending in '.'. Output strict JSON:
 {"base_prompt": "...", "scene_description": "...", "dialogue": "...", "characters": [{"name": "short label", "prompt": "..."}]}
@@ -363,8 +363,53 @@ _IDENTITY_RE = re.compile(
 )
 
 
+# Innate features stay innate under any modifier: 'purple wings', 'black
+# halo', 'multiple horns' are the same wings/halo/horns the strip exists to
+# remove, but the exact-name list above let every coloured/counted/positioned
+# variant straight through. Match on the feature noun as the tag's final
+# word, with the carve-outs the rules promise: 'fake X' is a costume piece
+# and stays, and 'french horn' is an instrument, not anatomy.
+_ID_FEATURE_SUFFIX_RE = re.compile(
+    r"^(?!fake )(?!french horn$)(?!party horn$)(?:[\w'()-]+ ){0,4}"
+    r"(?:wings?|horns?|halos?|tails?|antlers|fangs?|"
+    # ears only in species form — a bare 'ears' suffix would also strip
+    # pose tags like 'covering ears'
+    r"(?:animal|cat|fox|dog|rabbit|bunny|horse|cow|mouse|bear|wolf|raccoon|tiger|elf|pointy) ears)$"
+)
+
+
 def _strip_identity_backstop(text: str) -> str:
-    return ", ".join(t for t in _tokens(text) if not _IDENTITY_RE.match(_canon(t)))
+    return ", ".join(
+        t
+        for t in _tokens(text)
+        if not _IDENTITY_RE.match(_canon(t))
+        and not _ID_FEATURE_SUFFIX_RE.match(_canon(t))
+    )
+
+
+# The same features leak through scene_description as prose ("her purple
+# wings spread slightly behind her"), which the tag-level backstop never
+# sees. Sentence surgery is risky, so the scrub is clause-level: drop the
+# comma-separated clauses that mention an innate feature, keep the rest of
+# the sentence, and drop the sentence only when nothing survives.
+_ID_PROSE_RE = re.compile(
+    r"\b(?:wings?|horns?|halos?|antlers|fangs?|tails?|"
+    r"(?:animal|cat|fox|dog|rabbit|bunny|wolf|pointy|elf) ears)\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_identity_prose(text: str) -> str:
+    if not text or not _ID_PROSE_RE.search(text):
+        return text
+    sentences = []
+    for sentence in text.split("."):
+        if not sentence.strip():
+            continue
+        kept = [c for c in sentence.split(",") if not _ID_PROSE_RE.search(c)]
+        if kept:
+            sentences.append(",".join(kept).strip())
+    return " ".join(s + "." for s in sentences)
 
 
 # Style/quality vocabulary that must never be smuggled in via the invented-
@@ -927,6 +972,7 @@ def nai_split(
     ]
     if strip_identity:
         base_tags = _strip_identity_backstop(base_tags)
+        scene = _strip_identity_prose(scene)
         characters = [
             {"name": "", "prompt": _strip_identity_backstop(ch["prompt"])}
             for ch in characters

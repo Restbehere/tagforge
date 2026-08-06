@@ -10,6 +10,28 @@ and `backend/pyproject.toml` — and read from there everywhere else (the
 sidebar footer, Settings → About, and `GET /api/health`). Bump both, and
 add an entry here, in the same commit as the change.
 
+## 0.9.5 — 2026-08-06
+
+### Fixed
+- **Identity strip no longer leaks modified innate features.** The strip
+  backstop matched exact tag names only, so bare `wings`/`horns`/`halo`
+  were removed while `purple wings`, `low wings`, `multiple horns` and
+  `black halo` sailed through into supposedly character-agnostic prompts.
+  Innate features are now caught by their feature noun under any modifier,
+  with the promised carve-outs intact (`fake animal ears`/`fake horns`/
+  `fake tail` are costume pieces and stay; `french horn` and `party horn`
+  are props, and pose tags like `covering ears` are untouched).
+- **The scene description leaked the same features as prose** ("her purple
+  wings spread slightly behind her") — invisible to any tag-level filter.
+  In strip mode, clauses mentioning innate features are now removed from
+  scene sentences, keeping the rest ("The girl squats low on a
+  sun-drenched sandy beach. She looks directly up at the viewer...").
+  The prompt also now spells out that coloured/counted variants are still
+  innate and that scene_description must describe pose and setting without
+  them. Verified live both ways: strip mode outputs zero feature mentions
+  across base, scene and characters with the outfit intact; keep mode
+  still carries wings, horns, halo and the character name.
+
 ## 0.9.4 — 2026-08-05
 
 ### Changed
