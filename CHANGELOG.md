@@ -10,6 +10,15 @@ and `backend/pyproject.toml` — and read from there everywhere else (the
 sidebar footer, Settings → About, and `GET /api/health`). Bump both, and
 add an entry here, in the same commit as the change.
 
+## 0.11.1 — 2026-08-09
+
+### Fixed
+- **A backend restart made the handoff silently deaf.** The sequence number
+  was an in-memory counter, so after a restart it began again at 1 — and a
+  poller that remembered a higher number from before the restart discarded
+  every new result as already-seen. The sequence is now floored to
+  millisecond epoch time, monotonic across restarts.
+
 ## 0.11.0 — 2026-08-09
 
 ### Added
