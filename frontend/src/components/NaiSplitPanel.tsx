@@ -28,6 +28,22 @@ const ENRICH_BG_LS = "tagforge-nai-enrich-bg";
 const BUBBLE_LS = "tagforge-nai-bubble";
 const TEXTPOS_LS = "tagforge-nai-text-pos";
 
+/** The panel's persisted settings, for callers that process without the
+ *  panel UI (Builder's batch runner). Same keys, same defaults. */
+export function readNaiSplitSettings() {
+  return {
+    mode: (localStorage.getItem(MODE_LS) as Mode) || "natural",
+    model: localStorage.getItem(MODEL_LS) || undefined,
+    include_speech: localStorage.getItem(SPEECH_LS) === "1",
+    strip_identity: localStorage.getItem(STRIP_LS) === "1",
+    invent_background: localStorage.getItem(INVENT_BG_LS) === "1",
+    enrich_background: localStorage.getItem(ENRICH_BG_LS) === "1",
+    bubble: (localStorage.getItem(BUBBLE_LS) as BubbleMode) || "auto",
+    text_position:
+      (localStorage.getItem(TEXTPOS_LS) as TextPosition) || "attributed",
+  };
+}
+
 const BUBBLE_OPTS: { value: BubbleMode; label: string }[] = [
   { value: "auto", label: "auto" },
   { value: "on", label: "bubble" },

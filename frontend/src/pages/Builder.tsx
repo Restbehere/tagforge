@@ -3,9 +3,9 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Copy, Dice5, Film, Lock, RefreshCw, Unlock } from "lucide-react";
 
-import { api, type RolledScene } from "@/lib/api";
+import { api, llmApi, type RolledScene } from "@/lib/api";
 import { danbooruPostUrl, naiSpacedTags } from "@/lib/naiTags";
-import { NaiSplitPanel } from "@/components/NaiSplitPanel";
+import { NaiSplitPanel, readNaiSplitSettings } from "@/components/NaiSplitPanel";
 import { Panel } from "@/components/Panel";
 import { PresetPicker } from "@/components/PresetPicker";
 import { BucketBadge } from "@/components/BucketBadge";
@@ -285,6 +285,96 @@ export function Builder() {
       return;
     }
     rollMut.mutate({ coherent, key });
+  };
+
+  // ---- batch: roll -> process -> handoff, N times with an interval --------
+  // Each processed result lands in /api/llm/handoff, where the NAI bridge
+  // userscript picks it up and (optionally) generates. The interval is the
+  // pause AFTER each handoff so NAI has time to generate before the next
+  // result replaces it.
+  const [batchRuns, setBatchRuns] = useState(
+    () => Number(localStorage.getItem("tagforge-batch-runs")) || 10,
+  );
+  const [batchInterval, setBatchInterval] = useState(
+    () => Number(localStorage.getItem("tagforge-batch-interval")) || 20,
+  );
+  const [batchNote, setBatchNote] = useState("");
+  const [batchBusy, setBatchBusy] = useState(false);
+  const batchStop = useRef(false);
+  useEffect(() => {
+    localStorage.setItem("tagforge-batch-runs", String(batchRuns));
+    localStorage.setItem("tagforge-batch-interval", String(batchInterval));
+  }, [batchRuns, batchInterval]);
+
+  const batchSleep = async (ms: number) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      if (batchStop.current) return false;
+      await new Promise((r) => setTimeout(r, Math.min(400, end - Date.now())));
+    }
+    return true;
+  };
+
+  const runBatch = async () => {
+    setBatchBusy(true);
+    batchStop.current = false;
+    const settings = readNaiSplitSettings();
+    let failures = 0;
+    let done = 0;
+    try {
+      for (let i = 0; i < batchRuns; i++) {
+        if (batchStop.current) break;
+        try {
+          setBatchNote(`${i + 1}/${batchRuns} rolling…`);
+          // Coherent rolls only: the splitter works from a source image's
+          // full tag list, so a roll without an image is retried.
+          let image: RolledScene["image"] = null;
+          let buckets: Record<string, string> = {};
+          for (let tries = 0; tries < 3 && !image; tries++) {
+            const res = await api.rollBuilder({
+              buckets: BUCKETS,
+              locked: lockedValues(),
+              coherent: true,
+              count: 1,
+              ...rollParams(),
+            });
+            image = res.image ?? null;
+            buckets = res.buckets;
+          }
+          if (!image) throw new Error("no coherent scene found (3 tries)");
+          applyRoll({ buckets, image }, true); // keep the visible roll in sync
+
+          setBatchNote(`${i + 1}/${batchRuns} processing image #${image.id}…`);
+          const detail = await api.getScene(image.id);
+          await llmApi.naiSplit({
+            tags: naiSpacedTags(detail.raw_prompt),
+            ...settings,
+          });
+          done++;
+          failures = 0;
+        } catch (err) {
+          failures++;
+          toast.error(`batch run ${i + 1}: ${(err as Error).message}`);
+          if (failures >= 3) {
+            toast.error("3 consecutive failures — batch aborted");
+            break;
+          }
+        }
+        if (i < batchRuns - 1) {
+          setBatchNote(
+            `${i + 1}/${batchRuns} done — waiting ${batchInterval}s for NAI…`,
+          );
+          if (!(await batchSleep(batchInterval * 1000))) break;
+        }
+      }
+    } finally {
+      setBatchBusy(false);
+      setBatchNote(
+        batchStop.current
+          ? `stopped after ${done}/${batchRuns}`
+          : `finished ${done}/${batchRuns}`,
+      );
+    }
   };
 
   const rerollMut = useMutation({
@@ -737,6 +827,54 @@ export function Builder() {
             : "will process the assembled prompt above — roll a scene first to work from a source image's full tags"
         }
       >
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded border border-line bg-bg-subtle/30 p-2">
+          <span className="text-xs font-semibold">Batch</span>
+          <input
+            type="number"
+            min={1}
+            max={500}
+            className="pf-input h-8 w-16"
+            value={batchRuns}
+            onChange={(e) => setBatchRuns(Number(e.target.value) || 1)}
+            disabled={batchBusy}
+            title="How many scenes to roll and process"
+          />
+          <span className="text-xs text-text-muted">runs ×</span>
+          <input
+            type="number"
+            min={0}
+            max={600}
+            className="pf-input h-8 w-16"
+            value={batchInterval}
+            onChange={(e) => setBatchInterval(Number(e.target.value) || 0)}
+            disabled={batchBusy}
+            title="Seconds to wait after each handoff so NAI can generate before the next one lands"
+          />
+          <span className="text-xs text-text-muted">s interval</span>
+          {batchBusy ? (
+            <button
+              type="button"
+              className="pf-btn h-8 px-3 text-xs"
+              onClick={() => {
+                batchStop.current = true;
+              }}
+            >
+              Stop
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="pf-btn-primary h-8 px-3 text-xs"
+              onClick={() => void runBatch()}
+              title="Roll a coherent scene, process its full tags, hand off to the NAI bridge — repeat"
+            >
+              Start batch
+            </button>
+          )}
+          {batchNote && (
+            <span className="text-xs text-text-muted">{batchNote}</span>
+          )}
+        </div>
         <NaiSplitPanel
           allowCompose
           resolveInput={async () => {

@@ -10,6 +10,16 @@ and `backend/pyproject.toml` — and read from there everywhere else (the
 sidebar footer, Settings → About, and `GET /api/health`). Bump both, and
 add an entry here, in the same commit as the change.
 
+## 0.11.0 — 2026-08-09
+
+### Added
+- **Batch runner on the Builder** (next to the splitter): roll a coherent
+  scene, process its full tag list with the splitter's current settings,
+  hand the result off to the browser bridge — N times, with a configurable
+  pause between runs so the image generator can finish each picture before
+  the next prompt lands. Stop button, per-run progress, aborts after three
+  consecutive failures; run count and interval persist.
+
 ## 0.10.0 — 2026-08-06
 
 ### Added
