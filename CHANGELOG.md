@@ -10,6 +10,16 @@ and `backend/pyproject.toml` — and read from there everywhere else (the
 sidebar footer, Settings → About, and `GET /api/health`). Bump both, and
 add an entry here, in the same commit as the change.
 
+## 0.10.0 — 2026-08-06
+
+### Added
+- **Split handoff for browser userscripts** (`GET /api/llm/handoff`). Every
+  split/compose result is kept in a one-slot in-memory buffer with a
+  monotonic sequence number, so a userscript running on an image
+  generator's page can poll the local API and inject new prompts the
+  moment Process finishes — no copy-paste round trip. In-memory only;
+  restarting the backend clears it.
+
 ## 0.9.5 — 2026-08-06
 
 ### Fixed

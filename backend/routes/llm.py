@@ -8,10 +8,17 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from .. import handoff
 from .. import llm as svc
 from .. import llm_config, settings
 
 router = APIRouter()
+
+
+@router.get("/handoff")
+def llm_handoff() -> dict[str, Any]:
+    """Latest split result for the NAI bridge userscript (see handoff.py)."""
+    return handoff.current()
 
 
 @router.get("/status")
@@ -76,7 +83,7 @@ def nai_split(body: NaiSplitIn) -> dict[str, Any]:
         raise HTTPException(400, "mode must be 'split' or 'natural'")
     if not body.tags.strip():
         raise HTTPException(400, "tags is empty")
-    return _call_llm(
+    result = _call_llm(
         svc.nai_split,
         body.tags.strip(),
         body.mode,
@@ -88,6 +95,10 @@ def nai_split(body: NaiSplitIn) -> dict[str, Any]:
         body.bubble,
         body.text_position,
     )
+    # Every Process is offered to the NAI bridge userscript; it only acts
+    # on results it has not seen, so this is free when the bridge is idle.
+    handoff.store(result)
+    return result
 
 
 class TtlIn(BaseModel):
@@ -251,4 +262,6 @@ class NaiComposeIn(BaseModel):
 def nai_compose(body: NaiComposeIn) -> dict[str, Any]:
     if not body.idea.strip():
         raise HTTPException(400, "idea is empty")
-    return _call_llm(svc.nai_compose, body.idea.strip(), body.model)
+    result = _call_llm(svc.nai_compose, body.idea.strip(), body.model)
+    handoff.store(result)
+    return result
