@@ -10,6 +10,20 @@ and `backend/pyproject.toml` — and read from there everywhere else (the
 sidebar footer, Settings → About, and `GET /api/health`). Bump both, and
 add an entry here, in the same commit as the change.
 
+## 0.12.0 — 2026-08-15
+
+### Added
+- **Extra instructions on the NAI splitter.** A free-text field for guidance
+  the checkboxes don't cover — "always set the scene at night", "keep each
+  character under 15 tags", a phrasing style. The text is passed to the
+  model as binding user directions that may override the use-only-input-tags
+  default and background modes, but never the output shape or tag-placement
+  rules. Applies to Process, Compose, and Builder batch runs; persists
+  across sessions; clear the field to turn it off. Verified live: "set the
+  scene at heavy rain; mention wet hair" turned a sunny beach split into a
+  torrential-downpour scene with soaked hair and removed the day/blue-sky
+  tags, while an empty field leaves output byte-identical in behavior.
+
 ## 0.11.1 — 2026-08-09
 
 ### Fixed

@@ -50,6 +50,8 @@ class NaiSplitIn(BaseModel):
     # Speech-only knobs; ignored when include_speech is False.
     bubble: Literal["auto", "on", "off"] = "auto"
     text_position: Literal["attributed", "placed", "free"] = "attributed"
+    # Free-form guidance injected as a binding "User directions" line.
+    extra_instructions: str = Field(default="", max_length=600)
 
 
 def _call_llm(fn, *args) -> dict[str, Any]:
@@ -94,6 +96,7 @@ def nai_split(body: NaiSplitIn) -> dict[str, Any]:
         body.enrich_background,
         body.bubble,
         body.text_position,
+        body.extra_instructions,
     )
     # Every Process is offered to the NAI bridge userscript; it only acts
     # on results it has not seen, so this is free when the bridge is idle.
@@ -256,12 +259,15 @@ def test_llm_config(body: LlmTestIn) -> dict[str, Any]:
 class NaiComposeIn(BaseModel):
     idea: str = Field(min_length=3)
     model: Optional[str] = None
+    extra_instructions: str = Field(default="", max_length=600)
 
 
 @router.post("/nai-compose")
 def nai_compose(body: NaiComposeIn) -> dict[str, Any]:
     if not body.idea.strip():
         raise HTTPException(400, "idea is empty")
-    result = _call_llm(svc.nai_compose, body.idea.strip(), body.model)
+    result = _call_llm(
+        svc.nai_compose, body.idea.strip(), body.model, body.extra_instructions
+    )
     handoff.store(result)
     return result

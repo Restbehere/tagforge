@@ -207,6 +207,8 @@ Invented and enriched backgrounds must also be CLEAN and legible: the image mode
 
 The background_tags field: comma-separated tags ONLY when Background mode is INVENT or ENRICH as described above; otherwise it MUST be an empty string.
 
+User directions: the request may carry a "User directions:" line — free-form guidance from the user (stylistic constraints, content changes like a different time of day or weather, length limits, phrasing preferences). Follow it as binding instruction. Where it conflicts with rule 1's use-only-input-tags default or with the Background mode, the directions WIN — they are the user's explicit intent. They never override the JSON output shape, the base-vs-character placement rules (rules 3-6), or the meta-tag drop rules.
+
 Identity STRIP mode (when the prompt says Identity: STRIP): the user will substitute their OWN characters into this scene, so the output must be character-agnostic. Character prompts keep ONLY transferable elements - clothing, accessories, expression, personal pose/action - and still start with "girl, " or "boy, ". OMIT character name tags, series/copyright tags, and every innate physical trait: hair colour/length/style (blonde hair, long hair, twintails, ahoge, bangs...), eye colour/shape, pupil shape, skin tone, breast/body size, height/age descriptors, facial marks, and species features (animal ears, horns, tails, wings, halo, fangs, pointy ears) - unless a species feature is explicitly a costume piece (fake animal ears stay). Modified variants are STILL the same innate feature and must go too: purple wings, low wings, multiple horns, black halo, demon tail are all wings/horns/halo/tail. The same applies to base_prompt and scene_description: no names, no series, no innate traits - describe the pose and setting WITHOUT mentioning wings, horns, halos, tails or ears at all; refer to characters generically (the girl, the boy). Identity: KEEP means normal behavior."""
 
 NAI_COMPOSE_SYSTEM = """You author NovelAI V4.5 image prompts from a user's idea. NAI V4.5 understands Danbooru tags AND natural language: the strongest prompts mix both - concrete visual attributes as comma-separated tags, and spatial arrangement / story / interaction as short sentences ending in '.'. Output strict JSON:
@@ -848,6 +850,7 @@ def nai_split(
     enrich_background: bool = False,
     bubble: str = "auto",
     text_position: str = "attributed",
+    extra_instructions: str = "",
 ) -> dict[str, Any]:
     """Split a flat tag list into NAI V4.5 base + character prompts.
 
@@ -885,12 +888,16 @@ def nai_split(
         if include_speech
         else ""
     )
+    # Free-form user guidance rides along as a labeled, size-capped line the
+    # system prompt declares binding.
+    directions = " ".join((extra_instructions or "").split())[:600]
     user = (
         f"Mode: {mode.upper()}\nSpeech: {'ON' if include_speech else 'OFF'}\n"
         f"{speech_cfg}"
         f"Identity: {'STRIP' if strip_identity else 'KEEP'}\n"
         f"Background: {background}\n"
-        f"{hint}\nTags:\n{filtered_tags}"
+        + (f"User directions: {directions}\n" if directions else "")
+        + f"{hint}\nTags:\n{filtered_tags}"
     )
     try:
         with httpx.Client(timeout=httpx.Timeout(420.0, connect=5.0)) as c:
@@ -1006,10 +1013,16 @@ def nai_split(
     }
 
 
-def nai_compose(idea: str, model: str | None = None) -> dict[str, Any]:
+def nai_compose(
+    idea: str, model: str | None = None, extra_instructions: str = ""
+) -> dict[str, Any]:
     """Author a full NAI V4.5 prompt (base + characters + dialogue) from a
     free-text idea — memes, koma comics, anything. Creative temperature."""
     url, headers, model, target = _chat_target(model)
+    directions = " ".join((extra_instructions or "").split())[:600]
+    idea_msg = f"Idea:\n{idea}" + (
+        f"\nUser directions (binding): {directions}" if directions else ""
+    )
     t0 = time.time()
     with httpx.Client(timeout=httpx.Timeout(420.0, connect=5.0)) as c:
         r = c.post(
@@ -1019,7 +1032,7 @@ def nai_compose(idea: str, model: str | None = None) -> dict[str, Any]:
                 model,
                 [
                     {"role": "system", "content": NAI_COMPOSE_SYSTEM},
-                    {"role": "user", "content": f"Idea:\n{idea}"},
+                    {"role": "user", "content": idea_msg},
                 ],
                 target=target,
                 temperature=0.8,

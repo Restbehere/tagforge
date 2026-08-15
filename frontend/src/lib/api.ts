@@ -929,12 +929,13 @@ export const llmApi = {
     enrich_background?: boolean;
     bubble?: BubbleMode;
     text_position?: TextPosition;
+    extra_instructions?: string;
   }) =>
     request<NaiSplitResult>("/llm/nai-split", {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  naiCompose: (body: { idea: string; model?: string }) =>
+  naiCompose: (body: { idea: string; model?: string; extra_instructions?: string }) =>
     request<NaiSplitResult>("/llm/nai-compose", {
       method: "POST",
       body: JSON.stringify(body),

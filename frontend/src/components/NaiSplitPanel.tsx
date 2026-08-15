@@ -27,6 +27,7 @@ const INVENT_BG_LS = "tagforge-nai-invent-bg";
 const ENRICH_BG_LS = "tagforge-nai-enrich-bg";
 const BUBBLE_LS = "tagforge-nai-bubble";
 const TEXTPOS_LS = "tagforge-nai-text-pos";
+const INSTR_LS = "tagforge-nai-extra-instructions";
 
 /** The panel's persisted settings, for callers that process without the
  *  panel UI (Builder's batch runner). Same keys, same defaults. */
@@ -41,6 +42,7 @@ export function readNaiSplitSettings() {
     bubble: (localStorage.getItem(BUBBLE_LS) as BubbleMode) || "auto",
     text_position:
       (localStorage.getItem(TEXTPOS_LS) as TextPosition) || "attributed",
+    extra_instructions: localStorage.getItem(INSTR_LS) || "",
   };
 }
 
@@ -101,6 +103,9 @@ export function NaiSplitPanel({
   const [textPos, setTextPos] = useState<TextPosition>(
     () => (localStorage.getItem(TEXTPOS_LS) as TextPosition) || "attributed",
   );
+  const [extraInstructions, setExtraInstructions] = useState(
+    () => localStorage.getItem(INSTR_LS) ?? "",
+  );
   useEffect(() => {
     localStorage.setItem(MODE_LS, mode);
     localStorage.setItem(SPEECH_LS, speech ? "1" : "0");
@@ -109,8 +114,9 @@ export function NaiSplitPanel({
     localStorage.setItem(ENRICH_BG_LS, enrichBg ? "1" : "0");
     localStorage.setItem(BUBBLE_LS, bubble);
     localStorage.setItem(TEXTPOS_LS, textPos);
+    localStorage.setItem(INSTR_LS, extraInstructions);
     if (model) localStorage.setItem(MODEL_LS, model);
-  }, [mode, model, speech, stripIdentity, inventBg, enrichBg, bubble, textPos]);
+  }, [mode, model, speech, stripIdentity, inventBg, enrichBg, bubble, textPos, extraInstructions]);
 
   const models = status.data?.models ?? [];
   const remote = status.data?.remote === true;
@@ -162,6 +168,7 @@ export function NaiSplitPanel({
         enrich_background: enrichBg,
         bubble,
         text_position: textPos,
+        extra_instructions: extraInstructions.trim(),
       });
       return { res, label: input.label };
     },
@@ -192,7 +199,11 @@ export function NaiSplitPanel({
   const composeMut = useMutation({
     mutationFn: async () => {
       if (!idea.trim()) throw new Error("describe the idea first");
-      return llmApi.naiCompose({ idea: idea.trim(), model: effectiveModel });
+      return llmApi.naiCompose({
+        idea: idea.trim(),
+        model: effectiveModel,
+        extra_instructions: extraInstructions.trim(),
+      });
     },
     onMutate: () => {
       setResult(null);
@@ -446,6 +457,15 @@ export function NaiSplitPanel({
           </span>
         </div>
       )}
+
+      <input
+        className="pf-input h-9 w-full text-xs"
+        maxLength={600}
+        placeholder='Extra instructions (optional, persists) — e.g. "always set the scene at night", "keep each character under 15 tags", "describe poses in French maid style"'
+        title="Free-form guidance passed to the model as binding directions. Applies to Process, Compose, and Builder batch runs. Clear the field to turn it off."
+        value={extraInstructions}
+        onChange={(e) => setExtraInstructions(e.target.value)}
+      />
 
       {allowCompose && (
         <div className="flex items-start gap-2">
