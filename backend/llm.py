@@ -24,12 +24,14 @@ from .models import Tag
 
 logger = logging.getLogger("tagforge.llm")
 
-# The dense 27B beats the 35B-A3B MoE on this task: clean per-character
-# attribution with no tag duplication (the MoE hedges by copying ambiguous
-# tags to every character). The abliterated build keeps that attribution
-# discipline, stops the topic-level explicit-tag drops of the stock model,
-# and runs ~2x faster via MTP speculative decoding (llama-swap entry).
-DEFAULT_MODEL = "qwen3.6-27b-abliterated"
+# huihui's abliterated Qwen3.8-27B (Q8_0). Measured against the previous
+# default (abliterated 3.6): equal generation speed (~42 t/s, MTP on),
+# equal VRAM (~38GB split), and BETTER explicit-tag retention (4/5 vs 3/5
+# on a reference rating-e scene) — stock 3.8 by contrast silently softened
+# the corpus (4/8), which the abliteration fully recovers. MTP speculative
+# decoding via the llama-swap entry; the hybrid-DeltaNet arch needs the
+# b10441 llama.cpp build (older entries stay on the June binary).
+DEFAULT_MODEL = "qwen3.8-27b-abliterated"
 
 
 def _chat_target(model: str | None):

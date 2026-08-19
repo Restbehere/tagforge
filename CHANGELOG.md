@@ -10,6 +10,17 @@ and `backend/pyproject.toml` — and read from there everywhere else (the
 sidebar footer, Settings → About, and `GET /api/health`). Bump both, and
 add an entry here, in the same commit as the change.
 
+## 0.12.1 — 2026-08-20
+
+### Changed
+- **Default NAI-split model is now abliterated Qwen3.8-27B** (huihui Q8_0).
+  A/B against the previous default (abliterated 3.6), both with MTP: equal
+  generation speed (~42 t/s), equal VRAM (~38 GB across the two cards), and
+  better explicit-tag retention (4/5 vs 3/5 on a reference rating-e scene).
+  Stock 3.8 had regressed retention to 4/8 by silently softening the corpus;
+  the abliteration fully recovers it. Runs on the newer llama.cpp build the
+  hybrid-DeltaNet architecture requires.
+
 ## 0.12.0 — 2026-08-15
 
 ### Added
